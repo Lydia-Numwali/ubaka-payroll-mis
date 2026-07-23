@@ -6,6 +6,13 @@ frontend/node_modules/
 .pnp/
 .pnp.js
 
+# Python virtual environments
+venv/
+venv-fingerprint/
+.venv/
+env/
+ENV/
+
 # Build outputs
 dist/
 build/
