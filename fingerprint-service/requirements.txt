@@ -1,0 +1,6 @@
+flask==3.0.0
+flask-cors==4.0.0
+pyusb==1.2.1
+pillow==10.1.0
+numpy==1.26.2
+pyzkfp==0.1.0

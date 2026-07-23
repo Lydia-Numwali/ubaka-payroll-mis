@@ -1,0 +1,46 @@
+{
+  "name": "ubaka-frontend",
+  "version": "1.0.0",
+  "description": "Desktop UI for Ubaka Attendance Tracking System",
+  "main": "dist/main.js",
+  "scripts": {
+    "dev": "concurrently \"npm run dev:react\" \"npm run dev:electron\"",
+    "dev:react": "vite",
+    "dev:electron": "wait-on http://localhost:3000 && electron .",
+    "build": "tsc && vite build",
+    "build:electron": "electron-builder",
+    "start": "electron .",
+    "lint": "eslint . --ext .ts,.tsx",
+    "format": "prettier --write \"src/**/*.{ts,tsx}\"",
+    "test": "vitest"
+  },
+  "keywords": [
+    "electron",
+    "react",
+    "desktop"
+  ],
+  "author": "Ubaka Team",
+  "license": "ISC",
+  "dependencies": {
+    "axios": "^1.18.1",
+    "concurrently": "^10.0.3",
+    "electron": "^43.1.1",
+    "electron-builder": "^26.15.3",
+    "lucide-react": "^0.511.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "react-router-dom": "^7.18.1",
+    "wait-on": "^9.0.10"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.3",
+    "eslint": "^10.7.0",
+    "prettier": "^3.9.6",
+    "typescript": "^7.0.2",
+    "vite": "^8.1.5",
+    "vitest": "^4.1.10"
+  }
+}

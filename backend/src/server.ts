@@ -1,0 +1,116 @@
+import express, { Express, Request, Response } from 'express'
+import cors from 'cors'
+import * as dotenv from 'dotenv'
+import DatabaseManager from './config/database'
+import workerRoutes from './routes/workerRoutes'
+import attendanceRoutes from './routes/attendanceRoutes'
+import fingerprintRoutes from './routes/fingerprintRoutes'
+import { requestLogger } from './middleware/requestLogger'
+import { errorHandler } from './middleware/errorHandler'
+import { logger } from './utils/Logger'
+
+// Load environment variables
+dotenv.config()
+
+const app: Express = express()
+const PORT = process.env.PORT || 5000
+
+// Middleware
+app.use(cors())
+app.use(express.json())
+app.use(express.urlencoded({ extended: true }))
+
+// Request logging
+app.use(requestLogger)
+
+// Health check endpoint
+app.get('/health', async (req: Request, res: Response) => {
+  try {
+    const dbManager = DatabaseManager.getInstance()
+    const dbConnected = await dbManager.testConnection()
+
+    res.json({
+      status: 'ok',
+      timestamp: new Date().toISOString(),
+      database: dbConnected ? 'connected' : 'disconnected',
+      environment: process.env.NODE_ENV,
+    })
+  } catch (error) {
+    res.status(500).json({
+      status: 'error',
+      error: 'Health check failed',
+    })
+  }
+})
+
+// API routes
+app.get('/api', (req: Request, res: Response) => {
+  res.json({
+    message: 'Ubaka Attendance Tracking API',
+    version: '1.0.0',
+    endpoints: {
+      health: '/health',
+      workers: '/api/workers',
+      attendance: '/api/attendance',
+      anomalies: '/api/anomalies',
+      reports: '/api/reports',
+      config: '/api/config',
+    },
+  })
+})
+
+// Mount routes
+app.use('/api/workers', workerRoutes)
+app.use('/api/attendance', attendanceRoutes)
+app.use('/api/fingerprint', fingerprintRoutes)
+
+// Error handling middleware (must be last)
+app.use(errorHandler)
+
+// Start server
+async function startServer() {
+  try {
+    // Test database connection
+    const dbManager = DatabaseManager.getInstance()
+    const connected = await dbManager.testConnection()
+
+    if (!connected) {
+      logger.error('Failed to connect to database', new Error('Database connection failed'))
+      process.exit(1)
+    }
+
+    app.listen(PORT, () => {
+      logger.info('Server started successfully', {
+        port: PORT,
+        environment: process.env.NODE_ENV,
+        database: 'connected',
+      })
+      console.log(`🚀 Server running on http://localhost:${PORT}`)
+      console.log(`📊 Environment: ${process.env.NODE_ENV}`)
+      console.log(`✅ Database: Connected`)
+      console.log(`📝 Logs: backend/logs/`)
+    })
+  } catch (error) {
+    logger.error('Failed to start server', error as Error)
+    process.exit(1)
+  }
+}
+
+// Handle graceful shutdown
+process.on('SIGTERM', async () => {
+  logger.info('SIGTERM received, closing server...')
+  const dbManager = DatabaseManager.getInstance()
+  await dbManager.close()
+  process.exit(0)
+})
+
+process.on('SIGINT', async () => {
+  logger.info('SIGINT received, closing server...')
+  const dbManager = DatabaseManager.getInstance()
+  await dbManager.close()
+  process.exit(0)
+})
+
+startServer()
+
+export default app
