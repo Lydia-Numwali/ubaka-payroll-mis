@@ -1,13 +1,18 @@
 # Fingerprint Service (ZKTeco Live20R)
 
-Real hardware path uses the official **ZKFinger SDK for Linux** (`libzkfp.so`) via ctypes.
-MOCK mode is **off by default** (`ALLOW_MOCK=0`).
+Real hardware path uses the official ZKFinger C SDK via ctypes:
+
+- **Linux:** `libzkfp.so` in `resources/sdk/SDK/lib-x64/`
+- **Windows:** `libzkfp.dll` in `resources/sdk/windows/` (see that folder’s README)
+
+MOCK mode is **off by default** (`ALLOW_MOCK=0`). For the Windows all-in-one installer,
+mock is used automatically when DLLs are missing.
 
 ## Requirements
 
-1. Live20R connected over USB (`lsusb` shows `1b55:0120`)
-2. Native SDK libraries in `resources/sdk/SDK/lib-x64/` (especially `libzkfp.so`)
-3. udev rule: `/etc/udev/rules.d/99-zkteco.rules` (vendor `1b55`, product `0120`)
+1. Live20R connected over USB (`lsusb` shows `1b55:0120` on Linux)
+2. Native SDK libraries (Linux `.so` or Windows `.dll` as above)
+3. Linux udev rule **or** Windows Live20R driver
 
 ## Start
 
@@ -17,7 +22,23 @@ MOCK mode is **off by default** (`ALLOW_MOCK=0`).
 ./start-all.sh
 ```
 
-Verify:
+Windows (dev):
+
+```bat
+fingerprint-service\start.cmd
+```
+
+## Windows installer binary
+
+```bat
+pip install -r requirements.txt pyinstaller
+pyinstaller build_windows.spec
+```
+
+Produces `dist/fingerprint-service.exe` for `scripts/package-windows.sh`.
+See [PACKAGING.md](../PACKAGING.md).
+
+## Verify
 
 ```bash
 curl http://127.0.0.1:5001/health

@@ -1,7 +1,7 @@
 import { Pool, PoolConfig } from 'pg'
 import * as dotenv from 'dotenv'
 
-dotenv.config()
+dotenv.config({ path: process.env.DOTENV_CONFIG_PATH || undefined })
 
 const poolConfig: PoolConfig = {
   host: process.env.DB_HOST || 'localhost',

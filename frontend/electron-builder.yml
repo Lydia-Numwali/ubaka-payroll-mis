@@ -1,0 +1,37 @@
+appId: com.ubaka.attendance
+productName: Ubaka Attendance
+copyright: Copyright © Ubaka
+directories:
+  output: release
+  buildResources: build
+files:
+  - dist/**/*
+  - package.json
+extraResources:
+  - from: ../staging/backend
+    to: backend
+  - from: ../staging/postgresql
+    to: postgresql
+  - from: ../staging/node
+    to: node
+  - from: ../staging/fingerprint
+    to: fingerprint
+  - from: ../staging/sdk
+    to: sdk
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  artifactName: UbakaSetup-${version}.${ext}
+  # Place an icon at frontend/build/icon.ico when available
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Ubaka Attendance
+  installerLanguages:
+    - English
+  runAfterFinish: true
+asar: true

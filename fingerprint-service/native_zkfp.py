@@ -1,7 +1,9 @@
 """
 Native ZKFinger C SDK bindings via ctypes.
 
-Uses libzkfp.so from the official ZKFinger SDK for Linux (resources/sdk/SDK/lib-x64).
+Linux:  libzkfp.so from resources/sdk/SDK/lib-x64
+Windows: libzkfp.dll from resources/sdk/windows (or ZKFP_LIB_DIR)
+
 Supports full tear-down + reopen when the USB device is replugged or moves ports.
 """
 
@@ -10,6 +12,7 @@ from __future__ import annotations
 import ctypes
 import logging
 import os
+import sys
 import time
 from pathlib import Path
 from typing import Optional, Tuple
@@ -21,7 +24,9 @@ ZKFP_ERR_OK = 0
 ZKFP_ERR_CAPTURE = -8  # no finger present — poll again
 ZKFP_ERR_LIB_INIT = -2  # capture library init failed (stale state / USB race)
 
-_PRELOAD_ORDER = (
+_IS_WINDOWS = sys.platform.startswith('win')
+
+_PRELOAD_ORDER_LINUX = (
     "libusb-0.1.so.4",
     "libsqlite3.so.0",
     "libcrypto.so.0.9.8",
@@ -32,33 +37,64 @@ _PRELOAD_ORDER = (
     "libzkfp.so",
 )
 
+# Typical ZKFinger Windows SDK DLL names (order matters for dependency preload)
+_PRELOAD_ORDER_WINDOWS = (
+    "libusb-1.0.dll",
+    "sqlite3.dll",
+    "libiomp5md.dll",
+    "zkfinger10.dll",
+    "libzkfp.dll",
+)
+
+
+def _core_lib_name() -> str:
+    return "libzkfp.dll" if _IS_WINDOWS else "libzkfp.so"
+
 
 def default_sdk_lib_dir() -> Path:
+    env = os.environ.get("ZKFP_LIB_DIR")
+    if env:
+        return Path(env)
+
     here = Path(__file__).resolve().parent
-    return here.parent / "resources" / "sdk" / "SDK" / "lib-x64"
+    repo = here.parent
+    if _IS_WINDOWS:
+        return repo / "resources" / "sdk" / "windows"
+    return repo / "resources" / "sdk" / "SDK" / "lib-x64"
 
 
 def ensure_library_path(lib_dir: Optional[Path] = None) -> Path:
-    """Prepend SDK lib dir to LD_LIBRARY_PATH and preload shared objects."""
+    """Add SDK lib dir to the loader search path and preload shared objects."""
     lib_dir = Path(lib_dir) if lib_dir else default_sdk_lib_dir()
     if not lib_dir.is_dir():
         raise FileNotFoundError(f"ZKFinger SDK lib directory not found: {lib_dir}")
 
     lib_dir_str = str(lib_dir)
-    current = os.environ.get("LD_LIBRARY_PATH", "")
-    if lib_dir_str not in current.split(":"):
-        os.environ["LD_LIBRARY_PATH"] = (
-            f"{lib_dir_str}:{current}" if current else lib_dir_str
-        )
+    if _IS_WINDOWS:
+        # Python 3.8+ on Windows needs add_dll_directory for dependent DLLs
+        if hasattr(os, "add_dll_directory"):
+            os.add_dll_directory(lib_dir_str)
+        os.environ["PATH"] = f"{lib_dir_str}{os.pathsep}{os.environ.get('PATH', '')}"
+        preload = _PRELOAD_ORDER_WINDOWS
+        load = ctypes.WinDLL
+    else:
+        current = os.environ.get("LD_LIBRARY_PATH", "")
+        if lib_dir_str not in current.split(":"):
+            os.environ["LD_LIBRARY_PATH"] = (
+                f"{lib_dir_str}:{current}" if current else lib_dir_str
+            )
+        preload = _PRELOAD_ORDER_LINUX
+        load = lambda p: ctypes.CDLL(p, mode=ctypes.RTLD_GLOBAL)  # noqa: E731
 
-    for name in _PRELOAD_ORDER:
+    core = _core_lib_name()
+    for name in preload:
         path = lib_dir / name
         if not path.exists():
-            if name == "libzkfp.so":
+            if name == core:
                 raise FileNotFoundError(f"Missing required library: {path}")
             logger.warning(f"Optional SDK lib missing: {path}")
             continue
-        ctypes.CDLL(str(path), mode=ctypes.RTLD_GLOBAL)
+        load(str(path))
 
     return lib_dir
 
@@ -68,7 +104,11 @@ class NativeZKFP:
 
     def __init__(self, lib_dir: Optional[Path] = None):
         self.lib_dir = ensure_library_path(lib_dir)
-        self._lib = ctypes.CDLL(str(self.lib_dir / "libzkfp.so"))
+        core_path = self.lib_dir / _core_lib_name()
+        if _IS_WINDOWS:
+            self._lib = ctypes.WinDLL(str(core_path))
+        else:
+            self._lib = ctypes.CDLL(str(core_path))
         self._setup_prototypes()
         self.dev_handle = None
         self.db_handle = None

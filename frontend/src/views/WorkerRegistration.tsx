@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react'
 import { User, Fingerprint, Briefcase, MapPinned, RotateCcw, UserPlus, Loader2 } from 'lucide-react'
 import { workerService } from '../services/workerService'
 import fingerprintService from '../services/fingerprintService'
-import { Alert } from '../components/ui'
+import { useToast } from '../components/Toast'
 
 interface WorkerFormData {
   workerNumber: string
@@ -29,6 +29,7 @@ const classifications = [
 ]
 
 const WorkerRegistration: React.FC = () => {
+  const toast = useToast()
   const [formData, setFormData] = useState<WorkerFormData>({
     workerNumber: '',
     fullName: '',
@@ -42,8 +43,6 @@ const WorkerRegistration: React.FC = () => {
     emergencyPhone: '',
   })
   const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [success, setSuccess] = useState<string | null>(null)
   const [fingerprintScanning, setFingerprintScanning] = useState(false)
 
   useEffect(() => {
@@ -64,18 +63,16 @@ const WorkerRegistration: React.FC = () => {
   ) => {
     const { name, value } = e.target
     setFormData(prev => ({ ...prev, [name]: value }))
-    if (error) setError(null)
   }
 
   const handleFingerprintScan = async () => {
     try {
       setFingerprintScanning(true)
-      setError(null)
       const { template } = await fingerprintService.captureForEnrollment()
       setFormData(prev => ({ ...prev, fingerprintId: template }))
-      setSuccess('Fingerprint captured — place the same finger three times when prompted.')
+      toast.success('Fingerprint captured — place the same finger three times when prompted.')
     } catch (err: any) {
-      setError(err.message || 'Fingerprint capture failed')
+      toast.error(err.message || 'Fingerprint capture failed')
     } finally {
       setFingerprintScanning(false)
     }
@@ -112,19 +109,15 @@ const WorkerRegistration: React.FC = () => {
       emergencyContact: '',
       emergencyPhone: '',
     })
-    setError(null)
-    setSuccess(null)
     loadNextWorkerNumber()
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    setError(null)
-    setSuccess(null)
 
     const validationError = validateForm()
     if (validationError) {
-      setError(validationError)
+      toast.error(validationError)
       return
     }
 
@@ -143,10 +136,10 @@ const WorkerRegistration: React.FC = () => {
         emergencyPhone: formData.emergencyPhone.trim() || undefined,
       })
 
-      setSuccess(`${formData.fullName} registered successfully`)
+      toast.success(`${formData.fullName} registered successfully`)
       setTimeout(resetForm, 2000)
     } catch (err: any) {
-      setError(err.response?.data?.error || 'Failed to register worker')
+      toast.error(err.response?.data?.error || 'Failed to register worker')
     } finally {
       setLoading(false)
     }
@@ -154,9 +147,6 @@ const WorkerRegistration: React.FC = () => {
 
   return (
     <div className="worker-registration">
-      {error && <Alert variant="error" message={error} onDismiss={() => setError(null)} />}
-      {success && <Alert variant="success" message={success} onDismiss={() => setSuccess(null)} />}
-
       <form className="registration-form" onSubmit={handleSubmit}>
         <div className="form-sections">
           <section className="form-section">

@@ -47,7 +47,7 @@ try:
     from usb_device import find_live20r, wait_for_live20r, lsusb_hint, UsbDeviceSchema
     ensure_library_path()
     NATIVE_AVAILABLE = True
-    logger.info("Native ZKFinger SDK (libzkfp.so) available")
+    logger.info("Native ZKFinger SDK available")
 except Exception as e:
     logger.warning(f"Native ZKFinger SDK unavailable: {e}")
     find_live20r = None  # type: ignore
@@ -698,10 +698,10 @@ if __name__ == '__main__':
     if not initialize_scanner():
         logger.error("Scanner initialization failed at startup — service stays up for reconnect")
         logger.error("Checklist:")
-        logger.error("  1. Live20R plugged in (lsusb | grep 1b55)")
-        logger.error("  2. Native libs present: resources/sdk/SDK/lib-x64/libzkfp.so")
-        logger.error("  3. udev rule: /etc/udev/rules.d/99-zkteco.rules")
-        logger.error("  4. After plugging in: curl -X POST http://127.0.0.1:5001/scanner/reconnect")
+        logger.error("  1. Live20R plugged in")
+        logger.error("  2. Native libs: resources/sdk/SDK/lib-x64/libzkfp.so (Linux)")
+        logger.error("     or resources/sdk/windows/libzkfp.dll (Windows) / ZKFP_LIB_DIR")
+        logger.error("  3. Linux udev rule or Windows Live20R driver installed")
+        logger.error("  4. After plugging in: POST http://127.0.0.1:5001/scanner/reconnect")
         # Do NOT exit — allow /scanner/reconnect when device appears
-
     app.run(host='127.0.0.1', port=5001, debug=False)

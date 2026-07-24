@@ -12,9 +12,10 @@ import {
 import { attendanceService, EventType, AttendanceEvent } from '../services/attendanceService'
 import { workerService, Worker } from '../services/workerService'
 import fingerprintService from '../services/fingerprintService'
-import { Alert } from '../components/ui'
+import { useToast } from '../components/Toast'
 
 const AttendanceRecording: React.FC = () => {
+  const toast = useToast()
   const [workers, setWorkers] = useState<Worker[]>([])
   const [selectedWorker, setSelectedWorker] = useState<Worker | null>(null)
   const [searchTerm, setSearchTerm] = useState('')
@@ -23,8 +24,6 @@ const AttendanceRecording: React.FC = () => {
   const [recentEvents, setRecentEvents] = useState<AttendanceEvent[]>([])
   const [loading, setLoading] = useState(false)
   const [scanning, setScanning] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [success, setSuccess] = useState<string | null>(null)
 
   useEffect(() => {
     loadWorkers()
@@ -56,7 +55,7 @@ const AttendanceRecording: React.FC = () => {
       const data = await workerService.getAllWorkers(false)
       setWorkers(data)
     } catch {
-      setError('Failed to load workers')
+      toast.error('Failed to load workers')
     }
   }
 
@@ -84,33 +83,29 @@ const AttendanceRecording: React.FC = () => {
     setSelectedWorker(worker)
     setSearchTerm('')
     setFilteredWorkers([])
-    setError(null)
-    setSuccess(null)
   }
 
   const handleFingerprintScan = async () => {
     try {
       setScanning(true)
-      setError(null)
-      setSuccess(null)
 
       const result = await fingerprintService.identify()
       const matched = result?.worker
 
       if (matched) {
         handleWorkerSelect(result.worker as unknown as Worker)
-        setSuccess(
+        toast.success(
           `Identified ${matched.full_name} (${Math.round((result.confidence || 0) * 100)}% match)`
         )
       } else {
-        setError('Fingerprint not recognized. Search manually instead.')
+        toast.error('Fingerprint not recognized. Search manually instead.')
       }
     } catch (err: any) {
       const msg = err?.response?.data?.error || err?.message || 'Fingerprint not recognized'
       if (msg.toLowerCase().includes('not recognized') || err?.response?.status === 404) {
-        setError('Fingerprint not recognized. Search manually instead.')
+        toast.error('Fingerprint not recognized. Search manually instead.')
       } else {
-        setError(`Scanner error: ${msg}`)
+        toast.error(`Scanner error: ${msg}`)
       }
     } finally {
       setScanning(false)
@@ -119,27 +114,24 @@ const AttendanceRecording: React.FC = () => {
 
   const handleRecordEvent = async (eventType: EventType) => {
     if (!selectedWorker) {
-      setError('Select a worker first')
+      toast.error('Select a worker first')
       return
     }
 
     try {
       setLoading(true)
-      setError(null)
-      setSuccess(null)
 
       await attendanceService.recordEvent(selectedWorker.id, eventType, new Date(), false)
-      setSuccess(`${getEventTypeLabel(eventType)} recorded for ${selectedWorker.full_name}`)
+      toast.success(`${getEventTypeLabel(eventType)} recorded for ${selectedWorker.full_name}`)
 
       await loadNextEventTypes()
       await loadRecentEvents()
 
       setTimeout(() => {
         setSelectedWorker(null)
-        setSuccess(null)
       }, 2000)
     } catch (err: any) {
-      setError(err.response?.data?.error || 'Failed to record event')
+      toast.error(err.response?.data?.error || 'Failed to record event')
     } finally {
       setLoading(false)
     }
@@ -164,9 +156,6 @@ const AttendanceRecording: React.FC = () => {
 
   return (
     <div className="attendance-recording">
-      {error && <Alert variant="error" message={error} onDismiss={() => setError(null)} />}
-      {success && <Alert variant="success" message={success} onDismiss={() => setSuccess(null)} />}
-
       <div className="recording-layout">
         <div className="panel">
           <div className="panel__head">

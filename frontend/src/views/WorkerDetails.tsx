@@ -4,6 +4,7 @@ import { ArrowLeft, Pencil, Trash2, Save, X, Clock3, Wallet } from 'lucide-react
 import { workerService, Worker } from '../services/workerService'
 import { attendanceService } from '../services/attendanceService'
 import { Alert, LoadingState, EmptyState } from '../components/ui'
+import { useToast } from '../components/Toast'
 
 interface AttendanceRecord {
   date: string
@@ -16,10 +17,11 @@ interface AttendanceRecord {
 const WorkerDetails: React.FC = () => {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
+  const toast = useToast()
   const [worker, setWorker] = useState<Worker | null>(null)
   const [attendanceHistory, setAttendanceHistory] = useState<AttendanceRecord[]>([])
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [editMode, setEditMode] = useState(false)
   const [editData, setEditData] = useState<Partial<Worker>>({})
 
@@ -30,14 +32,14 @@ const WorkerDetails: React.FC = () => {
   const loadWorkerDetails = async () => {
     try {
       setLoading(true)
-      setError(null)
+      setLoadError(null)
       const workerData = await workerService.getWorkerById(parseInt(id!))
       setWorker(workerData)
       setEditData(workerData)
       const history = await attendanceService.getWorkerHistory(workerData.id, 30)
       setAttendanceHistory(history)
     } catch (err: any) {
-      setError(err.response?.data?.error || 'Failed to load worker details')
+      setLoadError(err.response?.data?.error || 'Failed to load worker details')
     } finally {
       setLoading(false)
     }
@@ -59,7 +61,6 @@ const WorkerDetails: React.FC = () => {
     if (!worker) return
     try {
       setLoading(true)
-      setError(null)
       await workerService.updateWorker(worker.id, {
         fullName: editData.full_name,
         phoneNumber: editData.phone_number,
@@ -71,8 +72,9 @@ const WorkerDetails: React.FC = () => {
       })
       await loadWorkerDetails()
       setEditMode(false)
+      toast.success('Worker updated successfully')
     } catch (err: any) {
-      setError(err.response?.data?.error || 'Failed to update worker')
+      toast.error(err.response?.data?.error || 'Failed to update worker')
     } finally {
       setLoading(false)
     }
@@ -83,9 +85,10 @@ const WorkerDetails: React.FC = () => {
     if (!confirm(`Deactivate ${worker.full_name}?`)) return
     try {
       await workerService.deactivateWorker(worker.id)
+      toast.success(`${worker.full_name} deactivated`)
       navigate('/workers')
     } catch (err: any) {
-      setError(err.response?.data?.error || 'Failed to deactivate worker')
+      toast.error(err.response?.data?.error || 'Failed to deactivate worker')
     }
   }
 
@@ -111,11 +114,11 @@ const WorkerDetails: React.FC = () => {
 
   if (loading && !worker) return <LoadingState label="Loading worker…" />
 
-  if (error && !worker) {
+  if (loadError && !worker) {
     return (
       <Alert
         variant="error"
-        message={error}
+        message={loadError}
         actionLabel="Back to workers"
         onAction={() => navigate('/workers')}
       />
@@ -157,8 +160,6 @@ const WorkerDetails: React.FC = () => {
           )}
         </div>
       </div>
-
-      {error && <Alert variant="error" message={error} onDismiss={() => setError(null)} />}
 
       <div className="details-content">
         <div className="panel">

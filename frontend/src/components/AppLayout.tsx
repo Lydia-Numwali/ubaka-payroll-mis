@@ -8,6 +8,7 @@ import {
   Menu,
   X,
 } from 'lucide-react'
+import Logo from './Logo'
 
 const NAV_ITEMS = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true },
@@ -44,7 +45,10 @@ const AppLayout: React.FC = () => {
     <div className="app-shell">
       <aside className={`sidebar ${mobileOpen ? 'sidebar--open' : ''}`}>
         <div className="sidebar__brand">
-          <span className="sidebar__logo">UBAKA</span>
+          <div className="sidebar__brand-mark">
+            <Logo className="sidebar__logo" />
+            <span className="sidebar__wordmark">UBAKA</span>
+          </div>
           <button
             type="button"
             className="sidebar__close"

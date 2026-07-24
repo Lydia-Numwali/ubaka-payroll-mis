@@ -164,20 +164,28 @@ npm run dev
 
 The Electron app will launch automatically.
 
-### Production Build
+### Production Build (Windows all-in-one installer)
 
-**Build Backend:**
+See **[PACKAGING.md](PACKAGING.md)** for the full Windows NSIS installer that bundles
+Electron, the API, portable PostgreSQL, and the fingerprint service.
+
+```bash
+# On a Windows build machine (Git Bash):
+./scripts/package-windows.sh
+# → frontend/release/UbakaSetup-1.0.0.exe
+```
+
+**Backend only (dev/server):**
 ```bash
 cd backend
 npm run build
 npm start
 ```
 
-**Build Frontend:**
+**Frontend UI only:**
 ```bash
 cd frontend
 npm run build
-npm run build:electron
 ```
 
 ## API Endpoints

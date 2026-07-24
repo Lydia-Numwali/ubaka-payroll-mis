@@ -10,7 +10,7 @@ import { errorHandler } from './middleware/errorHandler'
 import { logger } from './utils/Logger'
 
 // Load environment variables
-dotenv.config()
+dotenv.config({ path: process.env.DOTENV_CONFIG_PATH || undefined })
 
 const app: Express = express()
 const PORT = process.env.PORT || 5000

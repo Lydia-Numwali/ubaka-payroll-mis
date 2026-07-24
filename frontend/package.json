@@ -1,14 +1,19 @@
 {
-  "name": "ubaka-frontend",
+  "name": "ubaka-attendance",
   "version": "1.0.0",
-  "description": "Desktop UI for Ubaka Attendance Tracking System",
+  "description": "Ubaka Attendance Tracking System — all-in-one desktop app",
   "main": "dist/main.js",
+  "author": "Ubaka Team",
+  "license": "ISC",
   "scripts": {
     "dev": "concurrently \"npm run dev:react\" \"npm run dev:electron\"",
     "dev:react": "vite",
-    "dev:electron": "wait-on http://localhost:3000 && electron .",
-    "build": "tsc && vite build",
-    "build:electron": "electron-builder",
+    "dev:electron": "npm run build:electron-main && wait-on http://localhost:3000 && cross-env NODE_ENV=development UBAKA_SKIP_SERVICES=1 UBAKA_ELECTRON_DEV=1 electron .",
+    "build:electron-main": "tsc -p electron/tsconfig.json",
+    "build:renderer": "vite build",
+    "build": "npm run build:electron-main && npm run build:renderer",
+    "dist:win": "npm run build && electron-builder --win --x64 --config electron-builder.yml",
+    "electron:packaged-dev": "npm run build && cross-env NODE_ENV=production electron .",
     "start": "electron .",
     "lint": "eslint . --ext .ts,.tsx",
     "format": "prettier --write \"src/**/*.{ts,tsx}\"",
@@ -17,30 +22,30 @@
   "keywords": [
     "electron",
     "react",
-    "desktop"
+    "desktop",
+    "attendance"
   ],
-  "author": "Ubaka Team",
-  "license": "ISC",
   "dependencies": {
     "axios": "^1.18.1",
-    "concurrently": "^10.0.3",
-    "electron": "^43.1.1",
-    "electron-builder": "^26.15.3",
     "lucide-react": "^0.511.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
-    "react-router-dom": "^7.18.1",
-    "wait-on": "^9.0.10"
+    "react-router-dom": "^7.18.1"
   },
   "devDependencies": {
     "@types/node": "^26.1.1",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.3",
+    "concurrently": "^10.0.3",
+    "cross-env": "^7.0.3",
+    "electron": "^43.1.1",
+    "electron-builder": "^26.15.3",
     "eslint": "^10.7.0",
     "prettier": "^3.9.6",
     "typescript": "^7.0.2",
     "vite": "^8.1.5",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.10",
+    "wait-on": "^9.0.10"
   }
 }

@@ -85,6 +85,13 @@ out/
 release-builds/
 frontend/out/
 frontend/release-builds/
+frontend/release/
+staging/
+vendor/
+
+# Fingerprint Windows build
+fingerprint-service/dist/
+fingerprint-service/build/
 
 # Database
 *.sqlite
