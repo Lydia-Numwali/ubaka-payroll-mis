@@ -2,7 +2,7 @@
 Native ZKFinger C SDK bindings via ctypes.
 
 Uses libzkfp.so from the official ZKFinger SDK for Linux (resources/sdk/SDK/lib-x64).
-Bypasses pyzkfp / .NET so Live20R works without Mono or coreclr for capture/match.
+Supports full tear-down + reopen when the USB device is replugged or moves ports.
 """
 
 from __future__ import annotations
@@ -18,8 +18,8 @@ logger = logging.getLogger('zkfinger_service')
 
 MAX_TEMPLATE_SIZE = 2048
 ZKFP_ERR_OK = 0
-# -8 = capture failed / no finger present (poll again)
-ZKFP_ERR_CAPTURE = -8
+ZKFP_ERR_CAPTURE = -8  # no finger present — poll again
+ZKFP_ERR_LIB_INIT = -2  # capture library init failed (stale state / USB race)
 
 _PRELOAD_ORDER = (
     "libusb-0.1.so.4",
@@ -64,7 +64,7 @@ def ensure_library_path(lib_dir: Optional[Path] = None) -> Path:
 
 
 class NativeZKFP:
-    """Thin wrapper around ZKFPM_* C API."""
+    """Thin wrapper around ZKFPM_* C API with reconnect support."""
 
     def __init__(self, lib_dir: Optional[Path] = None):
         self.lib_dir = ensure_library_path(lib_dir)
@@ -75,6 +75,8 @@ class NativeZKFP:
         self.width = 0
         self.height = 0
         self._img_buf = None
+        self._sdk_initialized = False
+        self.device_index = 0
 
     def _setup_prototypes(self) -> None:
         L = self._lib
@@ -122,27 +124,71 @@ class NativeZKFP:
         ]
         L.ZKFPM_DBMatch.restype = ctypes.c_int
 
-    def init(self) -> None:
-        ret = self._lib.ZKFPM_Init()
-        if ret != ZKFP_ERR_OK:
-            raise RuntimeError(f"ZKFPM_Init failed: {ret}")
+    def init(self, retries: int = 3) -> None:
+        """Initialize SDK. Retries after Terminate when Init returns -2 (stale USB state)."""
+        last_err = None
+        for attempt in range(1, retries + 1):
+            # Always clear previous SDK state first
+            self._soft_terminate()
+            time.sleep(0.15 * attempt)
 
-    def terminate(self) -> None:
+            ret = self._lib.ZKFPM_Init()
+            if ret == ZKFP_ERR_OK:
+                self._sdk_initialized = True
+                logger.info(f"ZKFPM_Init OK (attempt {attempt})")
+                return
+
+            last_err = ret
+            logger.warning(f"ZKFPM_Init returned {ret} (attempt {attempt}/{retries})")
+            if ret == ZKFP_ERR_LIB_INIT:
+                self._soft_terminate()
+                time.sleep(0.4)
+                continue
+
+        raise RuntimeError(f"ZKFPM_Init failed after {retries} attempts: {last_err}")
+
+    def _soft_terminate(self) -> None:
+        """Best-effort close handles and terminate SDK without raising."""
         try:
             if self.db_handle:
                 self._lib.ZKFPM_DBFree(self.db_handle)
-                self.db_handle = None
+        except Exception:
+            pass
+        self.db_handle = None
+
+        try:
             if self.dev_handle:
                 self._lib.ZKFPM_CloseDevice(self.dev_handle)
-                self.dev_handle = None
+        except Exception:
+            pass
+        self.dev_handle = None
+        self._img_buf = None
+
+        try:
             self._lib.ZKFPM_Terminate()
+        except Exception:
+            pass
+        self._sdk_initialized = False
+
+    def terminate(self) -> None:
+        try:
+            self._soft_terminate()
         except Exception as e:
             logger.error(f"Native ZKFP terminate error: {e}")
 
     def get_device_count(self) -> int:
-        return int(self._lib.ZKFPM_GetDeviceCount())
+        if not self._sdk_initialized:
+            return 0
+        try:
+            return int(self._lib.ZKFPM_GetDeviceCount())
+        except Exception:
+            return 0
 
     def open_device(self, index: int = 0) -> None:
+        if not self._sdk_initialized:
+            raise RuntimeError("SDK not initialized — call init() first")
+
+        self.device_index = index
         handle = self._lib.ZKFPM_OpenDevice(index)
         if not handle:
             raise RuntimeError(f"ZKFPM_OpenDevice({index}) failed")
@@ -151,7 +197,6 @@ class NativeZKFP:
         self.width = self._get_int_param(1)
         self.height = self._get_int_param(2)
         if self.width <= 0 or self.height <= 0:
-            # Safe fallback used by many ZK optical sensors
             self.width, self.height = 256, 360
             logger.warning(
                 f"Could not read image size; using {self.width}x{self.height}"
@@ -169,6 +214,29 @@ class NativeZKFP:
             f"(image {self.width}x{self.height})"
         )
 
+    def reconnect(self, index: int = 0) -> None:
+        """Full tear-down and reopen — use after USB unplug/replug or port change."""
+        logger.info("Reconnecting ZKFinger SDK (terminate → init → open) …")
+        self.terminate()
+        time.sleep(0.35)
+        self.init()
+        count = self.get_device_count()
+        if count < 1:
+            raise RuntimeError("No ZKTeco device found after reconnect")
+        self.open_device(min(index, count - 1))
+
+    def is_open(self) -> bool:
+        return bool(self._sdk_initialized and self.dev_handle and self.db_handle)
+
+    def health_check(self) -> bool:
+        """Return True if SDK still sees at least one device and handles look valid."""
+        if not self.is_open():
+            return False
+        try:
+            return self.get_device_count() >= 1
+        except Exception:
+            return False
+
     def _get_int_param(self, code: int) -> int:
         buf = (ctypes.c_ubyte * 4)()
         size = ctypes.c_uint(4)
@@ -184,10 +252,6 @@ class NativeZKFP:
         timeout_sec: float = 30.0,
         poll_interval: float = 0.1,
     ) -> Tuple[bytes, bytes]:
-        """
-        Wait until a finger is placed, then return (template, image).
-        Raises TimeoutError if no finger within timeout_sec.
-        """
         if not self.dev_handle or self._img_buf is None:
             raise RuntimeError("Device not opened")
 
@@ -209,7 +273,6 @@ class NativeZKFP:
                 image = bytes(self._img_buf)
                 return template, image
             if ret not in (ZKFP_ERR_OK, ZKFP_ERR_CAPTURE):
-                # Non-retryable error
                 raise RuntimeError(f"ZKFPM_AcquireFingerprint failed: {ret}")
             time.sleep(poll_interval)
 
@@ -223,8 +286,7 @@ class NativeZKFP:
             raise RuntimeError("DB not initialized")
 
         def as_buf(data: bytes):
-            arr = (ctypes.c_ubyte * len(data)).from_buffer_copy(data)
-            return arr
+            return (ctypes.c_ubyte * len(data)).from_buffer_copy(data)
 
         out = (ctypes.c_ubyte * MAX_TEMPLATE_SIZE)()
         out_len = ctypes.c_uint(MAX_TEMPLATE_SIZE)
@@ -238,7 +300,6 @@ class NativeZKFP:
         return bytes(out[: out_len.value])
 
     def match(self, template1: bytes, template2: bytes) -> int:
-        """Return match score (higher is better). 0 or negative = no match."""
         if not self.db_handle:
             raise RuntimeError("DB not initialized")
 

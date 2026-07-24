@@ -3,7 +3,7 @@
 ZKTeco Live20R Fingerprint Scanner Service
 
 Primary path: native libzkfp.so (ctypes) — real USB hardware.
-Optional fallback: pyzkfp (.NET) if native path is unavailable.
+Detects USB port/device changes and auto-reconnects the SDK.
 MOCK only when ALLOW_MOCK=1 (disabled by default).
 """
 
@@ -12,7 +12,10 @@ from flask_cors import CORS
 import os
 import base64
 import logging
+import threading
+import time
 from datetime import datetime
+from typing import Optional
 
 logging.basicConfig(
     level=logging.INFO,
@@ -30,25 +33,29 @@ CAPTURE_TIMEOUT = float(os.environ.get('SCANNER_CAPTURE_TIMEOUT', '30'))
 scanner_initialized = False
 MODE = "UNINITIALIZED"
 SDK_TYPE = "none"
-native_scanner = None   # NativeZKFP instance
-zkfp = None             # pyzkfp ZKFP2 instance (fallback)
+native_scanner = None
+zkfp = None
+usb_schema = None          # current USB device identity/schema
+_last_reconnect_at = 0.0
+_scanner_lock = threading.RLock()
 
-# ---------------------------------------------------------------------------
-# Prefer native C SDK; optionally try pyzkfp
-# ---------------------------------------------------------------------------
 NATIVE_AVAILABLE = False
 PYZKFP_AVAILABLE = False
 
 try:
     from native_zkfp import NativeZKFP, ensure_library_path
+    from usb_device import find_live20r, wait_for_live20r, lsusb_hint, UsbDeviceSchema
     ensure_library_path()
     NATIVE_AVAILABLE = True
     logger.info("Native ZKFinger SDK (libzkfp.so) available")
 except Exception as e:
     logger.warning(f"Native ZKFinger SDK unavailable: {e}")
+    find_live20r = None  # type: ignore
+    wait_for_live20r = None  # type: ignore
+    lsusb_hint = lambda: ''  # type: ignore
+    UsbDeviceSchema = None  # type: ignore
 
 if not NATIVE_AVAILABLE:
-    # Configure pythonnet only if we need pyzkfp
     import shutil
     import subprocess
 
@@ -90,89 +97,240 @@ logger.info(f"Mode          : {MODE}")
 logger.info("=" * 60)
 
 
+def _update_usb_schema(device) -> bool:
+    """
+    Update tracked USB schema. Returns True if the device identity/port changed.
+    """
+    global usb_schema
+    if device is None:
+        changed = usb_schema is not None
+        usb_schema = None
+        return changed
+
+    changed = usb_schema is None or not device.same_port(usb_schema)
+    if changed:
+        logger.info(
+            "USB device schema updated: "
+            f"bus={device.bus} addr={device.address} "
+            f"path={device.sysfs_path} serial={device.serial or 'n/a'} "
+            f"identity={device.identity}"
+        )
+    usb_schema = device
+    return changed
+
+
 def initialize_scanner() -> bool:
     """Initialize connection to ZKTeco fingerprint scanner."""
     global scanner_initialized, native_scanner, zkfp, MODE, SDK_TYPE
-    global NATIVE_AVAILABLE, PYZKFP_AVAILABLE, SDK_AVAILABLE
 
-    if not SDK_AVAILABLE:
+    with _scanner_lock:
+        if not SDK_AVAILABLE and not NATIVE_AVAILABLE and not PYZKFP_AVAILABLE:
+            if ALLOW_MOCK:
+                logger.warning("No SDK — running in MOCK mode (ALLOW_MOCK=1)")
+                MODE = "MOCK"
+                SDK_TYPE = "mock"
+                scanner_initialized = True
+                return True
+            MODE = "DISABLED"
+            scanner_initialized = False
+            return False
+
+        # Prefer native path; never permanently disable it after one failure
+        if NATIVE_AVAILABLE:
+            try:
+                return _open_native()
+            except Exception as e:
+                logger.error(f"Native SDK init failed: {e}")
+                try:
+                    if native_scanner:
+                        native_scanner.terminate()
+                except Exception:
+                    pass
+                native_scanner = None
+
+        if PYZKFP_AVAILABLE:
+            try:
+                return _open_pyzkfp()
+            except Exception as e:
+                logger.error(f"pyzkfp init failed: {e}")
+                zkfp = None
+
         if ALLOW_MOCK:
-            logger.warning("No SDK — running in MOCK mode (ALLOW_MOCK=1)")
             MODE = "MOCK"
             SDK_TYPE = "mock"
             scanner_initialized = True
             return True
-        logger.error("No fingerprint SDK available and ALLOW_MOCK is not set")
+
         MODE = "DISABLED"
         scanner_initialized = False
         return False
 
-    # --- Native C SDK (preferred) ---
-    if NATIVE_AVAILABLE:
-        try:
-            logger.info("Initializing scanner with native libzkfp …")
-            native_scanner = NativeZKFP()
-            native_scanner.init()
-            count = native_scanner.get_device_count()
-            if count < 1:
-                raise RuntimeError(
-                    "No ZKTeco scanner detected via USB. "
-                    "Check cable, power, and udev rules (vendor 1b55)."
-                )
-            native_scanner.open_device(0)
-            MODE = "PRODUCTION"
-            SDK_TYPE = "native"
-            scanner_initialized = True
-            logger.info(f"ZKTeco Live20R opened (native), devices={count}")
-            return True
-        except Exception as e:
-            logger.error(f"Native SDK init failed: {e}")
-            try:
-                if native_scanner:
-                    native_scanner.terminate()
-            except Exception:
-                pass
-            native_scanner = None
-            NATIVE_AVAILABLE = False
 
-    # --- pyzkfp fallback ---
-    if PYZKFP_AVAILABLE:
-        try:
-            logger.info("Initializing scanner with pyzkfp …")
-            zkfp = ZKFP2()
-            zkfp.Init()
-            count = zkfp.GetDeviceCount()
-            if count < 1:
-                raise RuntimeError("No ZKTeco scanner detected via USB")
-            result = zkfp.OpenDevice(0)
-            if result is None or (isinstance(result, int) and result < 0):
-                # OpenDevice returns handle; treat falsy as failure only if int error
-                pass
-            MODE = "PRODUCTION"
-            SDK_TYPE = "pyzkfp"
-            scanner_initialized = True
-            logger.info(f"ZKTeco Live20R opened (pyzkfp), devices={count}")
-            return True
-        except Exception as e:
-            logger.error(f"pyzkfp init failed: {e}")
-            zkfp = None
-            PYZKFP_AVAILABLE = False
+def _open_native() -> bool:
+    global native_scanner, scanner_initialized, MODE, SDK_TYPE
 
-    SDK_AVAILABLE = False
-    if ALLOW_MOCK:
-        logger.warning("Hardware init failed — falling back to MOCK (ALLOW_MOCK=1)")
-        MODE = "MOCK"
-        SDK_TYPE = "mock"
-        scanner_initialized = True
-        return True
+    device = None
+    if find_live20r:
+        device = find_live20r()
+        if device is None and wait_for_live20r:
+            logger.info("Waiting for Live20R on USB …")
+            device = wait_for_live20r(timeout_sec=6.0)
+        if device is None:
+            hint = lsusb_hint() if callable(lsusb_hint) else ''
+            raise RuntimeError(
+                "No ZKTeco Live20R detected on USB (1b55:0120). "
+                f"{hint or 'Check cable and udev rules.'}"
+            )
+        _update_usb_schema(device)
 
-    logger.error(
-        "Hardware init failed. Fix the scanner connection, or set ALLOW_MOCK=1 "
-        "only for non-production testing."
+    if native_scanner is None:
+        native_scanner = NativeZKFP()
+
+    # Always reconnect path when opening fresh / after failure
+    native_scanner.terminate()
+    time.sleep(0.25)
+    native_scanner.init()
+    count = native_scanner.get_device_count()
+    if count < 1:
+        raise RuntimeError("SDK initialized but GetDeviceCount() == 0")
+
+    native_scanner.open_device(0)
+    MODE = "PRODUCTION"
+    SDK_TYPE = "native"
+    scanner_initialized = True
+    logger.info(
+        f"ZKTeco Live20R opened (native), devices={count}, "
+        f"usb={usb_schema.identity if usb_schema else 'unknown'}"
     )
-    MODE = "DISABLED"
-    scanner_initialized = False
-    return False
+    return True
+
+
+def _open_pyzkfp() -> bool:
+    global zkfp, scanner_initialized, MODE, SDK_TYPE
+    from pyzkfp import ZKFP2
+
+    zkfp = ZKFP2()
+    zkfp.Init()
+    count = zkfp.GetDeviceCount()
+    if count < 1:
+        raise RuntimeError("No ZKTeco scanner detected via USB")
+    zkfp.OpenDevice(0)
+    MODE = "PRODUCTION"
+    SDK_TYPE = "pyzkfp"
+    scanner_initialized = True
+    logger.info(f"ZKTeco Live20R opened (pyzkfp), devices={count}")
+    return True
+
+
+def reconnect_scanner(reason: str = "manual") -> bool:
+    """Force tear-down and reopen. Updates USB schema if the port changed."""
+    global _last_reconnect_at, native_scanner, scanner_initialized, MODE
+
+    with _scanner_lock:
+        now = time.time()
+        if now - _last_reconnect_at < 1.0:
+            logger.info("Reconnect skipped (throttled)")
+            return MODE == "PRODUCTION" and scanner_initialized
+
+        _last_reconnect_at = now
+        logger.info(f"Scanner reconnect requested ({reason})")
+
+        try:
+            if native_scanner:
+                native_scanner.terminate()
+        except Exception as e:
+            logger.warning(f"Terminate during reconnect: {e}")
+
+        scanner_initialized = False
+        MODE = "DISABLED"
+
+        # Wait briefly for USB re-enumeration after unplug/replug
+        device = None
+        if wait_for_live20r:
+            device = wait_for_live20r(timeout_sec=8.0)
+        elif find_live20r:
+            device = find_live20r()
+
+        if device:
+            _update_usb_schema(device)
+        else:
+            _update_usb_schema(None)
+            logger.error("Reconnect failed — Live20R not present on USB")
+            return False
+
+        try:
+            if NATIVE_AVAILABLE:
+                if native_scanner is None:
+                    native_scanner = NativeZKFP()
+                native_scanner.reconnect(0)
+                MODE = "PRODUCTION"
+                SDK_TYPE = "native"
+                scanner_initialized = True
+                logger.info(
+                    f"Reconnect OK — schema={usb_schema.identity if usb_schema else '?'}"
+                )
+                return True
+        except Exception as e:
+            logger.error(f"Native reconnect failed: {e}")
+
+        return initialize_scanner()
+
+
+def ensure_scanner_ready() -> Optional[str]:
+    """
+    Ensure scanner is usable. Detects USB port/device changes and reconnects.
+    Returns an error string if not ready, else None.
+    """
+    global MODE, scanner_initialized
+
+    if ALLOW_MOCK and MODE == "MOCK":
+        return None
+
+    needs_reconnect = False
+    reason = "auto-heal"
+
+    with _scanner_lock:
+        device = find_live20r() if find_live20r else None
+
+        if device is None:
+            if MODE == "PRODUCTION":
+                logger.warning("USB device missing — closing SDK handles")
+                try:
+                    if native_scanner:
+                        native_scanner.terminate()
+                except Exception:
+                    pass
+                MODE = "DISABLED"
+                scanner_initialized = False
+                _update_usb_schema(None)
+            return (
+                "Fingerprint scanner not detected on USB. "
+                "Plug in the Live20R and try again (or POST /scanner/reconnect)."
+            )
+
+        port_changed = _update_usb_schema(device)
+        healthy = (
+            MODE == "PRODUCTION"
+            and scanner_initialized
+            and native_scanner is not None
+            and native_scanner.health_check()
+        )
+
+        if port_changed:
+            needs_reconnect = True
+            reason = "usb-port-changed"
+        elif not healthy:
+            needs_reconnect = True
+            reason = "unhealthy-or-disconnected"
+
+    if needs_reconnect:
+        ok = reconnect_scanner(reason=reason)
+        if not ok:
+            return (
+                "Scanner reconnect failed. Unplug/replug the Live20R, "
+                "then retry or call /scanner/reconnect."
+            )
+    return None
 
 
 def cleanup_scanner():
@@ -213,27 +371,33 @@ atexit.register(cleanup_scanner)
 
 
 def _require_ready():
+    err = ensure_scanner_ready()
+    if err:
+        return jsonify({
+            'success': False,
+            'error': err,
+            'mode': MODE,
+            'usb': usb_schema.to_dict() if usb_schema else None,
+        }), 503
     if MODE == "DISABLED" or not scanner_initialized:
         return jsonify({
             'success': False,
             'error': (
                 'Fingerprint scanner is not available. '
-                'Check USB connection and that the fingerprint service started in PRODUCTION mode.'
+                'Check USB connection or POST /scanner/reconnect.'
             ),
             'mode': MODE,
+            'usb': usb_schema.to_dict() if usb_schema else None,
         }), 503
     return None
 
 
 def _acquire_with_pyzkfp(timeout_sec: float):
-    """Poll pyzkfp until a finger is captured or timeout."""
-    import time
     deadline = time.time() + timeout_sec
     while time.time() < deadline:
         capture = zkfp.AcquireFingerprint()
         if capture:
             tmp, img = capture
-            # Convert .NET Array[Byte] to bytes
             if not isinstance(tmp, (bytes, bytearray)):
                 tmp = bytes(tmp)
             return tmp, img
@@ -244,15 +408,23 @@ def _acquire_with_pyzkfp(timeout_sec: float):
     )
 
 
+def _usb_payload():
+    return usb_schema.to_dict() if usb_schema else None
+
+
 @app.route('/health', methods=['GET'])
 def health_check():
+    # Lightweight USB presence check (no forced reconnect)
+    present = find_live20r() is not None if find_live20r else None
     return jsonify({
-        'status': 'ok' if MODE != 'DISABLED' else 'degraded',
+        'status': 'ok' if MODE == 'PRODUCTION' else ('degraded' if MODE != 'DISABLED' else 'down'),
         'service': 'zkfinger_service',
-        'sdk_available': SDK_AVAILABLE or MODE == 'MOCK',
+        'sdk_available': NATIVE_AVAILABLE or PYZKFP_AVAILABLE or MODE == 'MOCK',
         'sdk_type': SDK_TYPE,
         'mode': MODE,
         'scanner_initialized': scanner_initialized,
+        'usb_present': present,
+        'usb': _usb_payload(),
         'allow_mock': ALLOW_MOCK,
         'timestamp': datetime.now().isoformat()
     })
@@ -260,26 +432,40 @@ def health_check():
 
 @app.route('/scanner/status', methods=['GET'])
 def get_scanner_status():
-    if MODE == "DISABLED" or not scanner_initialized:
-        return jsonify({
-            'success': False,
-            'connected': False,
-            'model': 'ZKTeco Live20R',
-            'sdk_available': False,
-            'sdk_type': SDK_TYPE,
-            'mode': MODE,
-            'error': 'Scanner not initialized'
-        }), 503
+    # Auto-heal if USB port changed or connection dropped
+    ensure_err = ensure_scanner_ready()
+    connected = MODE == "PRODUCTION" and scanner_initialized and ensure_err is None
 
-    connected = MODE == "PRODUCTION"
-    return jsonify({
-        'success': True,
+    payload = {
+        'success': connected or MODE == 'MOCK',
         'connected': connected,
         'model': 'ZKTeco Live20R',
-        'sdk_available': True,
+        'sdk_available': NATIVE_AVAILABLE or PYZKFP_AVAILABLE,
         'sdk_type': SDK_TYPE,
-        'mode': MODE
-    })
+        'mode': MODE,
+        'usb': _usb_payload(),
+    }
+    if ensure_err:
+        payload['error'] = ensure_err
+        return jsonify(payload), 503 if not connected else 200
+    return jsonify(payload)
+
+
+@app.route('/scanner/reconnect', methods=['POST'])
+def scanner_reconnect():
+    """Force reconnect — use after unplug/replug or USB port change."""
+    ok = reconnect_scanner(reason="api")
+    return jsonify({
+        'success': ok,
+        'connected': ok and MODE == 'PRODUCTION',
+        'mode': MODE,
+        'sdk_type': SDK_TYPE,
+        'usb': _usb_payload(),
+        'message': (
+            'Scanner reconnected successfully' if ok
+            else 'Reconnect failed — is the Live20R plugged in?'
+        ),
+    }), (200 if ok else 503)
 
 
 @app.route('/scanner/test', methods=['GET'])
@@ -295,7 +481,8 @@ def test_scanner():
                 'connected': True,
                 'device_count': native_scanner.get_device_count(),
                 'message': 'Scanner test successful — real hardware (native)',
-                'mode': 'PRODUCTION'
+                'mode': 'PRODUCTION',
+                'usb': _usb_payload(),
             })
         if MODE == "PRODUCTION" and zkfp:
             return jsonify({
@@ -303,18 +490,20 @@ def test_scanner():
                 'connected': True,
                 'device_count': zkfp.GetDeviceCount(),
                 'message': 'Scanner test successful — real hardware (pyzkfp)',
-                'mode': 'PRODUCTION'
+                'mode': 'PRODUCTION',
             })
         return jsonify({
             'success': True,
             'connected': False,
             'device_count': 0,
             'message': 'MOCK mode — no real hardware',
-            'mode': 'MOCK'
+            'mode': 'MOCK',
         })
     except Exception as e:
         logger.error(f"Scanner test failed: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        # One reconnect attempt then fail
+        reconnect_scanner(reason="test-failure")
+        return jsonify({'success': False, 'error': str(e), 'usb': _usb_payload()}), 500
 
 
 @app.route('/scanner/capture/enroll', methods=['POST'])
@@ -329,7 +518,13 @@ def capture_for_enrollment():
             templates = []
             for i in range(3):
                 logger.info(f"  Waiting for scan {i+1}/3 — place finger on scanner …")
-                tmp, _img = native_scanner.acquire_fingerprint(timeout_sec=CAPTURE_TIMEOUT)
+                try:
+                    tmp, _img = native_scanner.acquire_fingerprint(timeout_sec=CAPTURE_TIMEOUT)
+                except RuntimeError as capture_err:
+                    logger.warning(f"Capture error, reconnecting once: {capture_err}")
+                    if not reconnect_scanner(reason="capture-error"):
+                        raise
+                    tmp, _img = native_scanner.acquire_fingerprint(timeout_sec=CAPTURE_TIMEOUT)
                 templates.append(tmp)
                 logger.info(f"  Scan {i+1} captured ({len(tmp)} bytes)")
             enrollment = native_scanner.merge_templates(*templates)
@@ -339,7 +534,8 @@ def capture_for_enrollment():
                 'template_id': f"FP{int(datetime.now().timestamp())}",
                 'template': template_b64,
                 'quality': 90,
-                'mode': 'PRODUCTION'
+                'mode': 'PRODUCTION',
+                'usb': _usb_payload(),
             })
 
         if MODE == "PRODUCTION" and zkfp:
@@ -364,7 +560,6 @@ def capture_for_enrollment():
                 'mode': 'PRODUCTION'
             })
 
-        # MOCK (only if ALLOW_MOCK=1)
         logger.warning("MOCK: Returning simulated enrollment template")
         template_id = f"FP{int(datetime.now().timestamp())}"
         template_b64 = base64.b64encode(f"mock_template_{template_id}".encode()).decode()
@@ -382,7 +577,7 @@ def capture_for_enrollment():
         logger.error(f"Enrollment capture failed: {e}")
         import traceback
         traceback.print_exc()
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': str(e), 'usb': _usb_payload()}), 500
 
 
 @app.route('/scanner/capture/verify', methods=['POST'])
@@ -394,13 +589,20 @@ def capture_for_verification():
     try:
         if MODE == "PRODUCTION" and native_scanner:
             logger.info("PRODUCTION: Verification capture via native SDK …")
-            tmp, _img = native_scanner.acquire_fingerprint(timeout_sec=CAPTURE_TIMEOUT)
+            try:
+                tmp, _img = native_scanner.acquire_fingerprint(timeout_sec=CAPTURE_TIMEOUT)
+            except RuntimeError as capture_err:
+                logger.warning(f"Capture error, reconnecting once: {capture_err}")
+                if not reconnect_scanner(reason="capture-error"):
+                    raise
+                tmp, _img = native_scanner.acquire_fingerprint(timeout_sec=CAPTURE_TIMEOUT)
             template_b64 = base64.b64encode(tmp).decode('utf-8')
             return jsonify({
                 'success': True,
                 'template': template_b64,
                 'quality': 85,
-                'mode': 'PRODUCTION'
+                'mode': 'PRODUCTION',
+                'usb': _usb_payload(),
             })
 
         if MODE == "PRODUCTION" and zkfp:
@@ -430,7 +632,7 @@ def capture_for_verification():
         logger.error(f"Verification capture failed: {e}")
         import traceback
         traceback.print_exc()
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': str(e), 'usb': _usb_payload()}), 500
 
 
 @app.route('/scanner/match', methods=['POST'])
@@ -468,7 +670,6 @@ def match_fingerprints():
             score = zkfp.DBMatch(captured, stored)
             matched = score >= MATCH_THRESHOLD
             confidence = min(max(score, 0) / 100.0, 1.0)
-            logger.info(f"Match: {'YES' if matched else 'NO'} (score={score})")
             return jsonify({
                 'success': True,
                 'matched': matched,
@@ -477,8 +678,6 @@ def match_fingerprints():
                 'mode': 'PRODUCTION'
             })
 
-        # MOCK — never auto-match when user wants real biometrics;
-        # only reachable with ALLOW_MOCK=1
         logger.warning("MOCK: match always returns true (testing only)")
         return jsonify({
             'success': True,
@@ -497,13 +696,12 @@ def match_fingerprints():
 
 if __name__ == '__main__':
     if not initialize_scanner():
-        logger.error("Scanner initialization failed at startup")
+        logger.error("Scanner initialization failed at startup — service stays up for reconnect")
         logger.error("Checklist:")
         logger.error("  1. Live20R plugged in (lsusb | grep 1b55)")
         logger.error("  2. Native libs present: resources/sdk/SDK/lib-x64/libzkfp.so")
         logger.error("  3. udev rule: /etc/udev/rules.d/99-zkteco.rules")
-        logger.error("  4. Or set ALLOW_MOCK=1 for simulated testing only")
-        if not ALLOW_MOCK:
-            raise SystemExit(1)
+        logger.error("  4. After plugging in: curl -X POST http://127.0.0.1:5001/scanner/reconnect")
+        # Do NOT exit — allow /scanner/reconnect when device appears
 
     app.run(host='127.0.0.1', port=5001, debug=False)

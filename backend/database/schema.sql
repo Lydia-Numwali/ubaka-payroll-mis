@@ -65,6 +65,26 @@ CREATE INDEX idx_anomaly_worker ON attendance_anomaly(worker_id);
 CREATE INDEX idx_anomaly_date ON attendance_anomaly(detection_date);
 CREATE INDEX idx_anomaly_resolved ON attendance_anomaly(is_resolved);
 
+-- DailyWage Table (persisted hours × rate when worker exits for the day)
+CREATE TABLE daily_wage (
+    id SERIAL PRIMARY KEY,
+    worker_id INTEGER NOT NULL,
+    work_date DATE NOT NULL,
+    hours_worked DECIMAL(8, 2) NOT NULL,
+    hourly_rate DECIMAL(10, 2) NOT NULL,
+    wage_amount DECIMAL(12, 2) NOT NULL,
+    entry_time TIMESTAMP,
+    exit_time TIMESTAMP,
+    break_duration_ms BIGINT DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (worker_id) REFERENCES worker(id) ON DELETE CASCADE,
+    UNIQUE (worker_id, work_date)
+);
+
+CREATE INDEX idx_daily_wage_date ON daily_wage(work_date);
+CREATE INDEX idx_daily_wage_worker ON daily_wage(worker_id);
+
 -- SiteConfiguration Table
 CREATE TABLE site_configuration (
     id SERIAL PRIMARY KEY CHECK(id = 1),

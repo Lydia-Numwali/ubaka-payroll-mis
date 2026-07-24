@@ -40,10 +40,38 @@ export interface AttendanceEvent {
 
 export interface HoursWorkedResult {
   hoursWorked: number | null
-  status: 'COMPLETE' | 'INCOMPLETE'
+  status: 'COMPLETE' | 'IN_PROGRESS' | 'INCOMPLETE'
   entryTime?: Date
   exitTime?: Date
   breakDuration?: number
+  breakCount?: number
+}
+
+export interface DailyWage {
+  id: number
+  worker_id: number
+  work_date: Date
+  hours_worked: number
+  hourly_rate: number
+  wage_amount: number
+  entry_time?: Date
+  exit_time?: Date
+  break_duration_ms: number
+  created_at: Date
+  updated_at: Date
+}
+
+export interface DailyAttendanceSummaryRow {
+  worker_id: number
+  worker_number: string
+  full_name: string
+  classification: string
+  hourly_rate: number
+  entry_time: Date | null
+  exit_time: Date | null
+  break_count: number
+  hours_worked: number | null
+  daily_wage: number | null
 }
 
 // Anomaly Types

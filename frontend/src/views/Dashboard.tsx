@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { Users, CheckCircle2, Activity, CalendarDays } from 'lucide-react'
+import { Users, CheckCircle2, Activity, CalendarDays, Wallet } from 'lucide-react'
 import { attendanceService } from '../services/attendanceService'
 import { Alert, LoadingState, EmptyState } from '../components/ui'
 
@@ -12,6 +12,10 @@ interface DailySummary {
   entry_time: string | null
   exit_time: string | null
   break_count: number
+  break_minutes: number | null
+  hours_worked: number | null
+  daily_wage: number | null
+  hours_status?: string
 }
 
 const Dashboard: React.FC = () => {
@@ -21,18 +25,27 @@ const Dashboard: React.FC = () => {
 
   useEffect(() => {
     loadDailySummary()
+    // Refresh while workers are still on site so provisional hours/wages update
+    const id = window.setInterval(() => {
+      loadDailySummary({ silent: true })
+    }, 60_000)
+    return () => window.clearInterval(id)
   }, [])
 
-  const loadDailySummary = async () => {
+  const loadDailySummary = async (opts: { silent?: boolean } = {}) => {
     try {
-      setLoading(true)
+      if (!opts.silent) {
+        setLoading(true)
+      }
       setError(null)
       const data = await attendanceService.getDailySummary()
       setSummary(data)
     } catch (err: any) {
       setError(err.response?.data?.error || 'Failed to load daily summary')
     } finally {
-      setLoading(false)
+      if (!opts.silent) {
+        setLoading(false)
+      }
     }
   }
 
@@ -44,10 +57,27 @@ const Dashboard: React.FC = () => {
     })
   }
 
+  const formatHours = (hours: number | null) => {
+    if (hours == null) return '—'
+    return `${Number(hours).toFixed(2)}h`
+  }
+
+  const formatWage = (wage: number | null) => {
+    if (wage == null) return '—'
+    return `${Number(wage).toLocaleString('en-US', { maximumFractionDigits: 0 })} RWF`
+  }
+
+  const formatBreaks = (count: number, minutes: number | null) => {
+    if (!count && !minutes) return '0'
+    if (minutes == null || minutes === 0) return String(count)
+    return `${count} (${minutes}m)`
+  }
+
   if (loading) return <LoadingState label="Loading dashboard…" />
 
   const completed = summary.filter(w => w.exit_time).length
   const active = summary.filter(w => w.entry_time && !w.exit_time).length
+  const totalWages = summary.reduce((sum, w) => sum + (Number(w.daily_wage) || 0), 0)
 
   return (
     <div className="dashboard">
@@ -55,7 +85,7 @@ const Dashboard: React.FC = () => {
         <Alert variant="error" message={error} actionLabel="Retry" onAction={loadDailySummary} />
       )}
 
-      <div className="stats-grid">
+      <div className="stats-grid stats-grid--4">
         <div className="stat-card">
           <div className="stat-card__top">
             <div className="stat-card__icon">
@@ -65,7 +95,7 @@ const Dashboard: React.FC = () => {
           <div className="stat-value">{summary.length}</div>
           <div className="stat-label">Workers present</div>
         </div>
-        <div className="stat-card stat-card--amber">
+        <div className="stat-card">
           <div className="stat-card__top">
             <div className="stat-card__icon">
               <CheckCircle2 size={18} />
@@ -74,7 +104,7 @@ const Dashboard: React.FC = () => {
           <div className="stat-value">{completed}</div>
           <div className="stat-label">Completed shifts</div>
         </div>
-        <div className="stat-card stat-card--sky">
+        <div className="stat-card">
           <div className="stat-card__top">
             <div className="stat-card__icon">
               <Activity size={18} />
@@ -82,6 +112,17 @@ const Dashboard: React.FC = () => {
           </div>
           <div className="stat-value">{active}</div>
           <div className="stat-label">Active on site</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-card__top">
+            <div className="stat-card__icon">
+              <Wallet size={18} />
+            </div>
+          </div>
+          <div className="stat-value stat-value--sm">
+            {totalWages.toLocaleString('en-US', { maximumFractionDigits: 0 })}
+          </div>
+          <div className="stat-label">Total wages (RWF)</div>
         </div>
       </div>
 
@@ -108,6 +149,8 @@ const Dashboard: React.FC = () => {
                     <th>Entry</th>
                     <th>Exit</th>
                     <th>Breaks</th>
+                    <th>Hours</th>
+                    <th>Daily wage</th>
                     <th>Status</th>
                   </tr>
                 </thead>
@@ -121,7 +164,9 @@ const Dashboard: React.FC = () => {
                       <td>{worker.classification}</td>
                       <td>{formatTime(worker.entry_time)}</td>
                       <td>{formatTime(worker.exit_time)}</td>
-                      <td>{worker.break_count}</td>
+                      <td>{formatBreaks(worker.break_count, worker.break_minutes)}</td>
+                      <td>{formatHours(worker.hours_worked)}</td>
+                      <td>{formatWage(worker.daily_wage)}</td>
                       <td>
                         <span
                           className={`status-badge ${worker.exit_time ? 'completed' : 'active'}`}

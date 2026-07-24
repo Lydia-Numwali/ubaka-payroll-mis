@@ -7,7 +7,6 @@ import {
   UserPlus,
   Menu,
   X,
-  HardHat,
 } from 'lucide-react'
 
 const NAV_ITEMS = [
@@ -45,13 +44,7 @@ const AppLayout: React.FC = () => {
     <div className="app-shell">
       <aside className={`sidebar ${mobileOpen ? 'sidebar--open' : ''}`}>
         <div className="sidebar__brand">
-          <div className="sidebar__mark" aria-hidden>
-            <HardHat size={22} strokeWidth={2.25} />
-          </div>
-          <div className="sidebar__brand-text">
-            <span className="sidebar__name">Ubaka</span>
-            <span className="sidebar__tag">Attendance</span>
-          </div>
+          <span className="sidebar__logo">UBAKA</span>
           <button
             type="button"
             className="sidebar__close"

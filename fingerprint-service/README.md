@@ -29,10 +29,14 @@ curl http://127.0.0.1:5001/health
 Workers enrolled while the service was in MOCK mode have fake templates.
 Re-scan each worker’s fingerprint after switching to PRODUCTION so attendance matching works.
 
-## Mock (dev only)
+## Reconnect after unplug / USB port change
+
+The service tracks the Live20R USB identity (bus, address, sysfs path, serial).
+If you unplug and plug it back in (or move ports), it auto-reconnects on the next
+scan/status call and updates the USB schema.
+
+Manual reconnect:
 
 ```bash
-ALLOW_MOCK=1 ./fingerprint-service/start.sh
+curl -X POST http://127.0.0.1:5001/scanner/reconnect
 ```
-
-Do not use MOCK for real attendance.

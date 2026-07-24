@@ -51,10 +51,11 @@ export class FingerprintService {
         try {
             const response = await axios.get(`${this.serviceUrl}/scanner/status`, { timeout: 3000 })
             if (response.data?.success) {
-                this.connected = true
+                const connected = response.data.connected === true
+                this.connected = connected
                 return {
                     model: response.data.model || this.scannerModel,
-                    connected: response.data.connected || true,
+                    connected,
                     sdkType: response.data.sdk_type,
                     mode: response.data.mode
                 }

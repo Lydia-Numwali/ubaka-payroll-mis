@@ -85,11 +85,16 @@ export class AttendanceEventRepository extends BaseRepository<AttendanceEvent> {
         w.hourly_rate,
         MIN(CASE WHEN ae.event_type = 'ENTRY' THEN ae.timestamp END) as entry_time,
         MAX(CASE WHEN ae.event_type = 'EXIT' THEN ae.timestamp END) as exit_time,
-        COUNT(CASE WHEN ae.event_type = 'LEAVE_SITE' THEN 1 END) as break_count
+        COUNT(CASE WHEN ae.event_type = 'LEAVE_SITE' THEN 1 END)::int as break_count,
+        dw.hours_worked,
+        dw.wage_amount as daily_wage
       FROM worker w
       INNER JOIN ${this.tableName} ae ON w.id = ae.worker_id
+      LEFT JOIN daily_wage dw ON dw.worker_id = w.id AND dw.work_date = DATE($1)
       WHERE DATE(ae.timestamp) = DATE($1)
-      GROUP BY w.id, w.worker_number, w.full_name, w.classification, w.hourly_rate
+      GROUP BY
+        w.id, w.worker_number, w.full_name, w.classification, w.hourly_rate,
+        dw.hours_worked, dw.wage_amount
       ORDER BY w.full_name
     `
     const result = await this.pool.query(query, [date])

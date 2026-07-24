@@ -1,14 +1,18 @@
 import { AttendanceEventRepository } from '../repositories/AttendanceEventRepository'
 import { WorkerRepository } from '../repositories/WorkerRepository'
+import { DailyWageRepository } from '../repositories/DailyWageRepository'
 import { AttendanceEvent, EventType, HoursWorkedResult } from '../models/types'
+import { logger } from '../utils/Logger'
 
 export class AttendanceService {
     private attendanceRepository: AttendanceEventRepository
     private workerRepository: WorkerRepository
+    private dailyWageRepository: DailyWageRepository
 
     constructor() {
         this.attendanceRepository = new AttendanceEventRepository()
         this.workerRepository = new WorkerRepository()
+        this.dailyWageRepository = new DailyWageRepository()
     }
 
     async recordAttendanceEvent(
@@ -18,7 +22,6 @@ export class AttendanceService {
         isManualEntry: boolean = false,
         createdBy?: string
     ): Promise<AttendanceEvent> {
-        // Verify worker exists and is active
         const worker = await this.workerRepository.findById(workerId)
         if (!worker) {
             throw new Error(`Worker with ID ${workerId} not found`)
@@ -27,10 +30,8 @@ export class AttendanceService {
             throw new Error('Cannot record attendance for inactive worker')
         }
 
-        // Get today's events for this worker
         const todayEvents = await this.attendanceRepository.findByWorkerAndDate(workerId, timestamp)
 
-        // Validate event type based on current state
         const validNextEvents = this.determineNextEventType(todayEvents)
         if (!validNextEvents.includes(eventType)) {
             throw new Error(
@@ -38,19 +39,88 @@ export class AttendanceService {
             )
         }
 
-        // Record the event
-        return await this.attendanceRepository.recordEvent(
+        const event = await this.attendanceRepository.recordEvent(
             workerId,
             eventType,
             timestamp,
             isManualEntry,
             createdBy
         )
+
+        // Keep hours / breaks / wage up to date after entry, breaks, or exit
+        if (
+            eventType === 'ENTRY' ||
+            eventType === 'EXIT' ||
+            eventType === 'LEAVE_SITE' ||
+            eventType === 'RETURN_TO_SITE'
+        ) {
+            await this.upsertDailyWageProgress(
+                workerId,
+                timestamp,
+                Number(worker.hourly_rate),
+                eventType === 'EXIT'
+            )
+        }
+
+        return event
+    }
+
+    /**
+     * Persist (or refresh) daily hours & wage.
+     * - While still on site: provisional hours (entry → now, minus breaks) and wage
+     * - On EXIT: finalized COMPLETE record
+     */
+    async upsertDailyWageProgress(
+        workerId: number,
+        date: Date,
+        hourlyRate: number,
+        finalized: boolean = false
+    ): Promise<void> {
+        // For in-progress days use wall-clock "now"; EXIT uses the exit event as session end
+        const hoursResult = await this.calculateHoursWorked(workerId, date, {
+            asOf: finalized ? date : new Date(),
+        })
+        if (hoursResult.hoursWorked === null) {
+            logger.warn('Cannot update daily wage — no entry yet', { workerId })
+            return
+        }
+
+        const hoursWorked = hoursResult.hoursWorked
+        const wageAmount = Math.round(hoursWorked * hourlyRate * 100) / 100
+
+        await this.dailyWageRepository.upsert({
+            workerId,
+            workDate: date,
+            hoursWorked,
+            hourlyRate,
+            wageAmount,
+            entryTime: hoursResult.entryTime,
+            exitTime: hoursResult.exitTime,
+            breakDurationMs: hoursResult.breakDuration ?? 0,
+        })
+
+        logger.info(finalized ? 'Daily wage finalized' : 'Daily wage progress updated', {
+            workerId,
+            hoursWorked,
+            hourlyRate,
+            wageAmount,
+            breakCount: hoursResult.breakCount,
+            status: hoursResult.status,
+        })
+    }
+
+    /** @deprecated use upsertDailyWageProgress — kept for callers */
+    async finalizeDailyWage(
+        workerId: number,
+        date: Date,
+        hourlyRate: number
+    ): Promise<void> {
+        await this.upsertDailyWageProgress(workerId, date, hourlyRate, true)
     }
 
     determineNextEventType(events: AttendanceEvent[]): EventType[] {
         if (events.length === 0) {
-            return ['ENTRY'] // First event must be entry
+            return ['ENTRY']
         }
 
         const lastEvent = events[events.length - 1]
@@ -63,7 +133,7 @@ export class AttendanceService {
             case 'RETURN_TO_SITE':
                 return ['LEAVE_SITE', 'EXIT']
             case 'EXIT':
-                return [] // No more events allowed after exit
+                return []
             default:
                 throw new Error(`Unknown event type: ${lastEvent.event_type}`)
         }
@@ -73,69 +143,144 @@ export class AttendanceService {
         return await this.attendanceRepository.findByWorkerAndDate(workerId, date)
     }
 
-    async calculateHoursWorked(workerId: number, date: Date): Promise<HoursWorkedResult> {
+    async calculateHoursWorked(
+        workerId: number,
+        date: Date,
+        options: { asOf?: Date } = {}
+    ): Promise<HoursWorkedResult> {
         const events = await this.attendanceRepository.findByWorkerAndDate(workerId, date)
 
         if (events.length === 0) {
             return {
                 hoursWorked: null,
                 status: 'INCOMPLETE',
+                breakCount: 0,
+                breakDuration: 0,
             }
         }
 
-        // Sort events chronologically
         const sortedEvents = events.sort(
             (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
         )
 
-        // Find entry and exit
         const entryEvent = sortedEvents.find(e => e.event_type === 'ENTRY')
         const exitEvent = sortedEvents.find(e => e.event_type === 'EXIT')
 
-        if (!entryEvent || !exitEvent) {
+        if (!entryEvent) {
             return {
                 hoursWorked: null,
                 status: 'INCOMPLETE',
-                entryTime: entryEvent?.timestamp,
+                breakCount: 0,
+                breakDuration: 0,
             }
         }
 
-        // Calculate total session duration
-        const sessionDuration =
-            new Date(exitEvent.timestamp).getTime() - new Date(entryEvent.timestamp).getTime()
+        const asOf = options.asOf ?? new Date()
+        const entryTs = new Date(entryEvent.timestamp)
+        const lastEventTs = new Date(sortedEvents[sortedEvents.length - 1].timestamp)
 
-        // Calculate break periods
+        // Past incomplete days: stop at last event, not wall-clock now
+        const workDay = new Date(date)
+        const sameCalendarDay =
+            asOf.getFullYear() === workDay.getFullYear() &&
+            asOf.getMonth() === workDay.getMonth() &&
+            asOf.getDate() === workDay.getDate()
+
+        const sessionEnd = exitEvent
+            ? new Date(exitEvent.timestamp)
+            : sameCalendarDay
+              ? asOf
+              : lastEventTs
+        const sessionDuration = sessionEnd.getTime() - entryTs.getTime()
+
+        // Pair LEAVE_SITE → RETURN_TO_SITE chronologically; open leave counts until sessionEnd
         let totalBreakDuration = 0
-        const leaveEvents = sortedEvents.filter(e => e.event_type === 'LEAVE_SITE')
-        const returnEvents = sortedEvents.filter(e => e.event_type === 'RETURN_TO_SITE')
+        let breakCount = 0
+        let openLeave: Date | null = null
 
-        for (let i = 0; i < Math.min(leaveEvents.length, returnEvents.length); i++) {
-            const breakDuration =
-                new Date(returnEvents[i].timestamp).getTime() - new Date(leaveEvents[i].timestamp).getTime()
-            totalBreakDuration += breakDuration
+        for (const event of sortedEvents) {
+            const ts = new Date(event.timestamp)
+            if (event.event_type === 'LEAVE_SITE') {
+                openLeave = ts
+                breakCount += 1
+            } else if (event.event_type === 'RETURN_TO_SITE' && openLeave) {
+                totalBreakDuration += ts.getTime() - openLeave.getTime()
+                openLeave = null
+            }
+        }
+        if (openLeave) {
+            totalBreakDuration += sessionEnd.getTime() - openLeave.getTime()
         }
 
-        // Calculate net hours worked
-        const netDuration = sessionDuration - totalBreakDuration
-        const hoursWorked = netDuration / (1000 * 60 * 60) // Convert ms to hours
+        const netDuration = Math.max(0, sessionDuration - totalBreakDuration)
+        const hoursWorked = Math.round((netDuration / (1000 * 60 * 60)) * 60) / 60
 
         return {
-            hoursWorked: Math.round(hoursWorked * 60) / 60, // Round to nearest minute
-            status: 'COMPLETE',
+            hoursWorked,
+            status: exitEvent ? 'COMPLETE' : 'IN_PROGRESS',
             entryTime: entryEvent.timestamp,
-            exitTime: exitEvent.timestamp,
+            exitTime: exitEvent?.timestamp,
             breakDuration: totalBreakDuration,
+            breakCount,
         }
     }
 
     async getDailySummary(date: Date): Promise<any[]> {
-        return await this.attendanceRepository.getDailyAttendanceSummary(date)
+        const rows = await this.attendanceRepository.getDailyAttendanceSummary(date)
+
+        // Refresh hours / wage / breaks for every worker present today
+        for (const row of rows) {
+            try {
+                const hoursResult = await this.calculateHoursWorked(row.worker_id, date)
+                if (hoursResult.hoursWorked != null) {
+                    await this.upsertDailyWageProgress(
+                        row.worker_id,
+                        date,
+                        Number(row.hourly_rate),
+                        hoursResult.status === 'COMPLETE'
+                    )
+                    const wage = await this.dailyWageRepository.findByWorkerAndDate(
+                        row.worker_id,
+                        date
+                    )
+                    if (wage) {
+                        row.hours_worked = wage.hours_worked
+                        row.daily_wage = wage.wage_amount
+                        row.break_minutes = Math.round(
+                            Number(wage.break_duration_ms || 0) / 60000
+                        )
+                    }
+                }
+                // Prefer live break count from events
+                if (hoursResult.breakCount != null) {
+                    row.break_count = hoursResult.breakCount
+                }
+                row.hours_status = hoursResult.status
+            } catch (err) {
+                logger.warn('Failed to refresh daily summary row', {
+                    workerId: row.worker_id,
+                    error: (err as Error).message,
+                })
+            }
+        }
+
+        return rows.map(row => ({
+            ...row,
+            hours_worked: row.hours_worked != null ? Number(row.hours_worked) : null,
+            daily_wage: row.daily_wage != null ? Number(row.daily_wage) : null,
+            hourly_rate: Number(row.hourly_rate),
+            break_count: Number(row.break_count || 0),
+            break_minutes:
+                row.break_minutes != null
+                    ? Number(row.break_minutes)
+                    : null,
+            hours_status: row.hours_status || (row.exit_time ? 'COMPLETE' : 'IN_PROGRESS'),
+        }))
     }
 
     async getWorkerAttendanceHistory(workerId: number, days: number = 30): Promise<any[]> {
         const events = await this.attendanceRepository.getWorkerAttendanceHistory(workerId, days)
 
-        // Group events by date
         const eventsByDate: { [key: string]: AttendanceEvent[] } = {}
 
         events.forEach(event => {
@@ -146,16 +291,17 @@ export class AttendanceService {
             eventsByDate[dateKey].push(event)
         })
 
-        // Calculate hours for each date
         const history = []
         for (const [dateStr, dateEvents] of Object.entries(eventsByDate)) {
             const date = new Date(dateStr)
             const hoursResult = await this.calculateHoursWorked(workerId, date)
+            const wage = await this.dailyWageRepository.findByWorkerAndDate(workerId, date)
 
             history.push({
                 date: dateStr,
                 events: dateEvents.length,
                 hoursWorked: hoursResult.hoursWorked,
+                dailyWage: wage ? Number(wage.wage_amount) : null,
                 status: hoursResult.status,
                 entryTime: hoursResult.entryTime,
                 exitTime: hoursResult.exitTime,
@@ -179,7 +325,6 @@ export class AttendanceService {
 
         const events = await this.attendanceRepository.findByDateRange(startDate, endDate)
 
-        // Group by worker and date
         const grouped: { [key: string]: AttendanceEvent[] } = {}
 
         events.forEach(event => {
@@ -190,9 +335,8 @@ export class AttendanceService {
             grouped[key].push(event)
         })
 
-        // Build records
         const records = []
-        for (const [key, eventGroup] of Object.entries(grouped)) {
+        for (const [key] of Object.entries(grouped)) {
             const [workerIdStr, dateStr] = key.split('_')
             const workerId = parseInt(workerIdStr)
             const worker = await this.workerRepository.findById(workerId)
@@ -200,6 +344,7 @@ export class AttendanceService {
             if (worker) {
                 const date = new Date(dateStr)
                 const hoursResult = await this.calculateHoursWorked(workerId, date)
+                const wage = await this.dailyWageRepository.findByWorkerAndDate(workerId, date)
 
                 records.push({
                     workerId: worker.id,
@@ -208,6 +353,7 @@ export class AttendanceService {
                     classification: worker.classification,
                     date: dateStr,
                     hoursWorked: hoursResult.hoursWorked,
+                    dailyWage: wage ? Number(wage.wage_amount) : null,
                     status: hoursResult.status,
                     entryTime: hoursResult.entryTime,
                     exitTime: hoursResult.exitTime,
@@ -215,7 +361,6 @@ export class AttendanceService {
             }
         }
 
-        // Apply filters
         let filtered = records
         if (criteria.workerId) {
             filtered = filtered.filter(r => r.workerId === criteria.workerId)
