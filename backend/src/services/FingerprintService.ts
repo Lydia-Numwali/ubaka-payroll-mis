@@ -47,26 +47,69 @@ export class FingerprintService {
         return this.connected
     }
 
-    public async getScannerInfo(): Promise<{ model: string; connected: boolean; sdkType?: string; mode?: string }> {
+    public async getScannerInfo(): Promise<{
+        model: string
+        connected: boolean
+        sdkType?: string
+        mode?: string
+        error?: string
+    }> {
         try {
-            const response = await axios.get(`${this.serviceUrl}/scanner/status`, { timeout: 3000 })
-            if (response.data?.success) {
+            const response = await axios.get(`${this.serviceUrl}/scanner/status`, {
+                timeout: 8000,
+                // 503 still returns useful JSON (connected:false + error)
+                validateStatus: () => true,
+            })
+
+            if (response.data && typeof response.data === 'object') {
                 const connected = response.data.connected === true
                 this.connected = connected
                 return {
                     model: response.data.model || this.scannerModel,
                     connected,
                     sdkType: response.data.sdk_type,
-                    mode: response.data.mode
+                    mode: response.data.mode,
+                    error: response.data.error,
                 }
             }
         } catch (err) {
-            logger.warn('Failed to contact fingerprint microservice at port 5001', { error: (err as Error).message })
+            logger.warn('Failed to contact fingerprint microservice at port 5001', {
+                error: (err as Error).message,
+            })
+        }
+
+        // Fall back to /health so we can still report USB / init state
+        try {
+            const health = await axios.get(`${this.serviceUrl}/health`, {
+                timeout: 3000,
+                validateStatus: () => true,
+            })
+            const data = health.data || {}
+            const connected =
+                data.mode === 'PRODUCTION' && data.scanner_initialized === true
+            this.connected = connected
+            return {
+                model: this.scannerModel,
+                connected,
+                sdkType: data.sdk_type,
+                mode: data.mode,
+                error: connected
+                    ? undefined
+                    : data.usb_present === false
+                      ? 'Live20R not detected on USB'
+                      : 'Fingerprint scanner not ready',
+            }
+        } catch (err) {
+            this.connected = false
+            logger.warn('Fingerprint /health also unreachable', {
+                error: (err as Error).message,
+            })
         }
 
         return {
             model: this.scannerModel,
-            connected: false
+            connected: false,
+            error: 'Fingerprint service is not running on port 5001',
         }
     }
 

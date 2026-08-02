@@ -37,14 +37,37 @@ cd "$ROOT_DIR/backend"
 BE_PID=$(start_detached "$ROOT_DIR/backend.log" node_modules/.bin/tsx src/server.ts)
 echo "   Backend Server PID: $BE_PID"
 
-# Wait for services to initialize
-sleep 4
+# Wait for fingerprint Flask to accept connections (USB init can take several seconds)
+echo ""
+echo "Waiting for fingerprint service…"
+for i in $(seq 1 30); do
+  if curl -sf --max-time 1 http://127.0.0.1:5001/health >/dev/null 2>&1; then
+    break
+  fi
+  sleep 1
+done
+
+# If scanner was not ready at boot (USB late), try one reconnect
+FP_READY=$(curl -s --max-time 3 http://127.0.0.1:5001/health || true)
+if echo "$FP_READY" | grep -q '"scanner_initialized":false\|"usb_present":false\|"mode":"DISABLED"'; then
+  echo "Scanner not ready — attempting reconnect…"
+  curl -s --max-time 15 -X POST http://127.0.0.1:5001/scanner/reconnect >/dev/null || true
+  sleep 1
+fi
+
+# Wait for backend
+for i in $(seq 1 20); do
+  if curl -sf --max-time 1 http://127.0.0.1:5000/health >/dev/null 2>&1; then
+    break
+  fi
+  sleep 1
+done
 
 # 3. Check health
 echo ""
 echo "=== Service Status Check ==="
 FP_HEALTH=$(curl -s --max-time 3 http://127.0.0.1:5001/health || true)
-BE_STATUS=$(curl -s --max-time 3 http://127.0.0.1:5000/api/fingerprint/status || true)
+BE_STATUS=$(curl -s --max-time 8 http://127.0.0.1:5000/api/fingerprint/status || true)
 
 if [ -n "$FP_HEALTH" ]; then
   echo "Fingerprint: $FP_HEALTH"

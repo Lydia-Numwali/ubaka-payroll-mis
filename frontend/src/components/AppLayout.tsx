@@ -5,6 +5,8 @@ import {
   Users,
   Fingerprint,
   UserPlus,
+  ClipboardCheck,
+  FileBarChart,
   Menu,
   X,
 } from 'lucide-react'
@@ -14,6 +16,8 @@ const NAV_ITEMS = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true },
   { to: '/workers', label: 'Workers', icon: Users },
   { to: '/attendance', label: 'Attendance', icon: Fingerprint },
+  { to: '/supervisor', label: 'Supervisor', icon: ClipboardCheck },
+  { to: '/reports', label: 'Reports', icon: FileBarChart },
   { to: '/register', label: 'Register', icon: UserPlus },
 ]
 
@@ -21,10 +25,15 @@ const PAGE_TITLES: Record<string, { title: string; subtitle: string }> = {
   '/': { title: "Today's Attendance", subtitle: 'Live site overview' },
   '/workers': { title: 'Workers', subtitle: 'Manage workforce roster' },
   '/attendance': { title: 'Record Attendance', subtitle: 'Scan or search to clock events' },
+  '/supervisor': { title: 'Supervisor Dashboard', subtitle: 'Review and approve attendance' },
+  '/reports': { title: 'Reports & Analytics', subtitle: 'Export and analyze data' },
   '/register': { title: 'Register Worker', subtitle: 'Enroll a new team member' },
 }
 
 function resolvePageMeta(pathname: string) {
+  if (pathname.startsWith('/workers/') && pathname.includes('/timecard')) {
+    return { title: 'Worker Time Card', subtitle: 'Detailed attendance and pay history' }
+  }
   if (pathname.startsWith('/workers/') && pathname !== '/workers') {
     return { title: 'Worker Profile', subtitle: 'Details & attendance history' }
   }

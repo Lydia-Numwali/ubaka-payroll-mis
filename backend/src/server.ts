@@ -5,6 +5,8 @@ import DatabaseManager from './config/database'
 import workerRoutes from './routes/workerRoutes'
 import attendanceRoutes from './routes/attendanceRoutes'
 import fingerprintRoutes from './routes/fingerprintRoutes'
+import attendanceCalculationRoutes from './routes/attendanceCalculationRoutes'
+import reportRoutes from './routes/reportRoutes'
 import { requestLogger } from './middleware/requestLogger'
 import { errorHandler } from './middleware/errorHandler'
 import { logger } from './utils/Logger'
@@ -63,6 +65,8 @@ app.get('/api', (req: Request, res: Response) => {
 app.use('/api/workers', workerRoutes)
 app.use('/api/attendance', attendanceRoutes)
 app.use('/api/fingerprint', fingerprintRoutes)
+app.use('/api/attendance-calculation', attendanceCalculationRoutes)
+app.use('/api/reports', reportRoutes)
 
 // Error handling middleware (must be last)
 app.use(errorHandler)

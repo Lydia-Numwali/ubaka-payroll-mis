@@ -135,6 +135,10 @@ const WorkerDetails: React.FC = () => {
           Back to workers
         </button>
         <div className="header-actions">
+          <button className="btn btn-info" onClick={() => navigate(`/workers/${id}/timecard`)}>
+            <Clock3 size={16} />
+            View Time Card
+          </button>
           {!editMode ? (
             <>
               <button className="btn btn-secondary" onClick={handleEditToggle}>
@@ -368,9 +372,8 @@ const WorkerDetails: React.FC = () => {
                         </td>
                         <td>
                           <span
-                            className={`status-badge ${
-                              record.status === 'COMPLETE' ? 'completed' : 'incomplete'
-                            }`}
+                            className={`status-badge ${record.status === 'COMPLETE' ? 'completed' : 'incomplete'
+                              }`}
                           >
                             {record.status}
                           </span>
