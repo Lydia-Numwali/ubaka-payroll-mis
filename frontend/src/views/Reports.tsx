@@ -92,8 +92,15 @@ const Reports: React.FC = () => {
         }
     };
 
-    const formatCurrency = (amount: number) => `${amount.toFixed(2)} RWF`;
-    const formatHours = (hours: number) => hours.toFixed(2);
+    const formatCurrency = (amount: number | string) => {
+        const numAmount = typeof amount === 'string' ? parseFloat(amount) : amount;
+        return `${isNaN(numAmount) ? '0.00' : numAmount.toFixed(2)} RWF`;
+    };
+
+    const formatHours = (hours: number | string) => {
+        const numHours = typeof hours === 'string' ? parseFloat(hours) : hours;
+        return isNaN(numHours) ? '0.00' : numHours.toFixed(2);
+    };
 
     const months = [
         'January', 'February', 'March', 'April', 'May', 'June',
@@ -190,7 +197,7 @@ const Reports: React.FC = () => {
                                 </div>
                                 <div className="stat-card stat-warning">
                                     <div className="stat-label">Late Rate</div>
-                                    <div className="stat-value">{monthlyReport.summary.late_arrival_rate.toFixed(1)}%</div>
+                                    <div className="stat-value">{(typeof monthlyReport.summary.late_arrival_rate === 'string' ? parseFloat(monthlyReport.summary.late_arrival_rate) : monthlyReport.summary.late_arrival_rate).toFixed(1)}%</div>
                                 </div>
                             </div>
 
@@ -220,7 +227,7 @@ const Reports: React.FC = () => {
                                                     <td>{worker.classification}</td>
                                                     <td>{worker.days_present}</td>
                                                     <td className={worker.days_late > 0 ? 'text-danger' : ''}>{worker.days_late}</td>
-                                                    <td className={worker.late_percentage > 10 ? 'text-danger' : ''}>{worker.late_percentage.toFixed(1)}%</td>
+                                                    <td className={worker.late_percentage > 10 ? 'text-danger' : ''}>{(typeof worker.late_percentage === 'string' ? parseFloat(worker.late_percentage) : worker.late_percentage).toFixed(1)}%</td>
                                                     <td>{formatHours(worker.total_hours)}</td>
                                                     <td>{formatCurrency(worker.regular_pay)}</td>
                                                     <td className="text-danger">{formatCurrency(worker.deductions)}</td>
@@ -280,7 +287,7 @@ const Reports: React.FC = () => {
                                                         <td>{worker.worker_number}</td>
                                                         <td>{worker.full_name}</td>
                                                         <td className="text-danger font-bold">{worker.late_count}</td>
-                                                        <td className="text-danger">{worker.total_late_minutes.toFixed(0)} min</td>
+                                                        <td className="text-danger">{(typeof worker.total_late_minutes === 'string' ? parseFloat(worker.total_late_minutes) : worker.total_late_minutes).toFixed(0)} min</td>
                                                     </tr>
                                                 ))}
                                             </tbody>
@@ -308,7 +315,7 @@ const Reports: React.FC = () => {
                                                         <td>{worker.worker_number}</td>
                                                         <td>{worker.full_name}</td>
                                                         <td>{worker.total_lates}</td>
-                                                        <td>{worker.average_late_minutes.toFixed(1)} min</td>
+                                                        <td>{(typeof worker.average_late_minutes === 'string' ? parseFloat(worker.average_late_minutes) : worker.average_late_minutes).toFixed(1)} min</td>
                                                         <td className="text-danger">{formatCurrency(worker.total_deductions)}</td>
                                                         <td>
                                                             <span className={`trend-badge trend-${worker.trend}`}>

@@ -118,12 +118,14 @@ const SupervisorDashboard: React.FC = () => {
         });
     };
 
-    const formatHours = (hours: number) => {
-        return hours.toFixed(2);
+    const formatHours = (hours: number | string) => {
+        const numHours = typeof hours === 'string' ? parseFloat(hours) : hours;
+        return isNaN(numHours) ? '0.00' : numHours.toFixed(2);
     };
 
-    const formatCurrency = (amount: number) => {
-        return `${amount.toFixed(2)} RWF`;
+    const formatCurrency = (amount: number | string) => {
+        const numAmount = typeof amount === 'string' ? parseFloat(amount) : amount;
+        return `${isNaN(numAmount) ? '0.00' : numAmount.toFixed(2)} RWF`;
     };
 
     const getStatusBadge = (status: string) => {
