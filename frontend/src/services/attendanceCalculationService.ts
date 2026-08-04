@@ -110,25 +110,25 @@ const attendanceCalculationService = {
     // Calculate daily summary for a specific worker
     async calculateDailySummary(workerId: number, date: string): Promise<CalculationResult> {
         const response = await api.post(`/attendance-calculation/calculate/${workerId}/${date}`);
-        return response.data;
+        return response.data; // Already has {success, data} structure
     },
 
     // Get calculated summary for a worker on a specific date
     async getSummary(workerId: number, date: string): Promise<DailyWorkSummary> {
         const response = await api.get(`/attendance-calculation/summary/${workerId}/${date}`);
-        return response.data;
+        return response.data.data; // Extract from {success, data}
     },
 
     // Get summaries requiring supervisor review
     async getPendingReview(): Promise<DailyWorkSummary[]> {
         const response = await api.get('/attendance-calculation/pending-review');
-        return response.data;
+        return response.data.data.summaries; // Extract from {success, data: {count, summaries}}
     },
 
     // Get full daily report for all workers
     async getDailyReport(date: string): Promise<DailyReport> {
         const response = await api.get(`/attendance-calculation/daily-report/${date}`);
-        return response.data;
+        return response.data.data;
     },
 
     // Get late arrival statistics for a date range
@@ -136,13 +136,13 @@ const attendanceCalculationService = {
         const response = await api.get('/attendance-calculation/late-arrivals', {
             params: { start_date: startDate, end_date: endDate }
         });
-        return response.data;
+        return response.data.data; // Extract from {success, data}
     },
 
     // Batch calculate for all workers on a specific date
     async calculateBatch(date: string): Promise<BatchCalculationResult> {
         const response = await api.post(`/attendance-calculation/calculate-batch/${date}`);
-        return response.data;
+        return response.data.data; // Extract from {success, data}
     },
 
     // Approve a summary for payroll

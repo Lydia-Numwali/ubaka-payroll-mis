@@ -22,4 +22,10 @@ router.get('/daily-report/:date', controller.getDailyReport)
 // Get late arrivals
 router.get('/late-arrivals', controller.getLateArrivals)
 
+// Approve summary for payroll
+router.post('/approve/:summaryId', controller.approveSummary)
+
+// Waive late deduction
+router.post('/waive-late/:lateId', controller.waiveLateDeduction)
+
 export default router

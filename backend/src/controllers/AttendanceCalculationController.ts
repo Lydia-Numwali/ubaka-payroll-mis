@@ -319,4 +319,93 @@ export class AttendanceCalculationController {
             })
         }
     }
+
+    /**
+     * Approve a summary for payroll
+     * POST /api/attendance-calculation/approve/:summaryId
+     */
+    public approveSummary = async (req: Request, res: Response): Promise<void> => {
+        try {
+            const summaryIdParam = Array.isArray(req.params.summaryId) ? req.params.summaryId[0] : req.params.summaryId
+            const summaryId = parseInt(summaryIdParam, 10)
+            const { approved_by } = req.body
+
+            if (isNaN(summaryId)) {
+                res.status(400).json({
+                    success: false,
+                    error: 'Invalid summary ID',
+                })
+                return
+            }
+
+            if (!approved_by) {
+                res.status(400).json({
+                    success: false,
+                    error: 'approved_by is required',
+                })
+                return
+            }
+
+            // In real system, approved_by would be user ID from auth token
+            // For now, accepting as string/number from request
+            await this.summaryRepo.approve(summaryId, typeof approved_by === 'string' ? 1 : approved_by)
+
+            res.json({
+                success: true,
+                message: 'Summary approved for payroll',
+            })
+
+            logger.info('Summary approved', { summaryId, approved_by })
+        } catch (error) {
+            logger.error('Failed to approve summary', error as Error)
+            res.status(500).json({
+                success: false,
+                error: 'Failed to approve summary',
+            })
+        }
+    }
+
+    /**
+     * Waive a late arrival deduction
+     * POST /api/attendance-calculation/waive-late/:lateId
+     */
+    public waiveLateDeduction = async (req: Request, res: Response): Promise<void> => {
+        try {
+            const lateIdParam = Array.isArray(req.params.lateId) ? req.params.lateId[0] : req.params.lateId
+            const lateId = parseInt(lateIdParam, 10)
+            const { waived_by, waiver_reason } = req.body
+
+            if (isNaN(lateId)) {
+                res.status(400).json({
+                    success: false,
+                    error: 'Invalid late arrival ID',
+                })
+                return
+            }
+
+            if (!waived_by || !waiver_reason) {
+                res.status(400).json({
+                    success: false,
+                    error: 'waived_by and waiver_reason are required',
+                })
+                return
+            }
+
+            // In real system, waived_by would be user ID from auth token
+            await this.lateRepo.waive(lateId, typeof waived_by === 'string' ? 1 : waived_by, waiver_reason)
+
+            res.json({
+                success: true,
+                message: 'Late deduction waived',
+            })
+
+            logger.info('Late deduction waived', { lateId, waived_by, waiver_reason })
+        } catch (error) {
+            logger.error('Failed to waive late deduction', error as Error)
+            res.status(500).json({
+                success: false,
+                error: 'Failed to waive late deduction',
+            })
+        }
+    }
 }
