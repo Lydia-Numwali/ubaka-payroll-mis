@@ -1,7 +1,9 @@
 import React, { useEffect, useState } from 'react'
-import { Users, CheckCircle2, Activity, CalendarDays, Wallet } from 'lucide-react'
+import { Users, CheckCircle2, Activity, CalendarDays, Wallet, Clock, AlertCircle, TrendingUp, Eye } from 'lucide-react'
 import { attendanceService } from '../services/attendanceService'
-import { Alert, LoadingState, EmptyState } from '../components/ui'
+import attendanceCalculationService, { DailyWorkSummary } from '../services/attendanceCalculationService'
+import { LoadingState, EmptyState } from '../components/ui'
+import { useToast } from '../components/Toast'
 
 interface DailySummary {
   worker_id: number
@@ -20,14 +22,21 @@ interface DailySummary {
 
 const Dashboard: React.FC = () => {
   const [summary, setSummary] = useState<DailySummary[]>([])
+  const [pendingReview, setPendingReview] = useState<DailyWorkSummary[]>([])
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  const [calculating, setCalculating] = useState(false)
+  const toast = useToast()
+  const [selectedDate] = useState<string>(new Date().toISOString().split('T')[0])
+  const [showReviewModal, setShowReviewModal] = useState(false)
+  const [selectedSummary, setSelectedSummary] = useState<DailyWorkSummary | null>(null)
 
   useEffect(() => {
     loadDailySummary()
-    // Refresh while workers are still on site so provisional hours/wages update
+    loadPendingReview()
+    // Refresh while workers are still on site
     const id = window.setInterval(() => {
       loadDailySummary({ silent: true })
+      loadPendingReview()
     }, 60_000)
     return () => window.clearInterval(id)
   }, [])
@@ -37,16 +46,54 @@ const Dashboard: React.FC = () => {
       if (!opts.silent) {
         setLoading(true)
       }
-      setError(null)
       const data = await attendanceService.getDailySummary()
       setSummary(data)
     } catch (err: any) {
-      setError(err.response?.data?.error || 'Failed to load daily summary')
+      toast.error(err.response?.data?.error || 'Failed to load daily summary')
     } finally {
       if (!opts.silent) {
         setLoading(false)
       }
     }
+  }
+
+  const loadPendingReview = async () => {
+    try {
+      const summaries = await attendanceCalculationService.getPendingReview()
+      setPendingReview(summaries)
+    } catch (error: any) {
+      console.error('Error loading pending reviews:', error)
+    }
+  }
+
+  const handleBatchCalculate = async () => {
+    setCalculating(true)
+    try {
+      const result = await attendanceCalculationService.calculateBatch(selectedDate)
+      toast.success(`Batch calculation complete: ${result.success}/${result.total} workers processed`)
+      await loadPendingReview()
+    } catch (error: any) {
+      toast.error('Failed to run batch calculation')
+    } finally {
+      setCalculating(false)
+    }
+  }
+
+  const handleApproveSummary = async (summary: DailyWorkSummary) => {
+    try {
+      await attendanceCalculationService.approveSummary(summary.id!, 'Supervisor')
+      toast.success(`Approved attendance for ${summary.full_name || summary.worker_number || `worker ${summary.worker_id}`}`)
+      setShowReviewModal(false)
+      setSelectedSummary(null)
+      await loadPendingReview()
+    } catch (error: any) {
+      toast.error('Failed to approve summary')
+    }
+  }
+
+  const handleOpenReview = (summary: DailyWorkSummary) => {
+    setSelectedSummary(summary)
+    setShowReviewModal(true)
   }
 
   const formatTime = (timeStr: string | null) => {
@@ -57,14 +104,30 @@ const Dashboard: React.FC = () => {
     })
   }
 
-  const formatHours = (hours: number | null) => {
+  const formatHours = (hours: number | string | null) => {
     if (hours == null) return '—'
-    return `${Number(hours).toFixed(2)}h`
+    const numHours = typeof hours === 'string' ? parseFloat(hours) : hours
+    return `${isNaN(numHours) ? 0 : numHours.toFixed(2)}h`
+  }
+
+  const formatMinutesToHours = (minutes: number) => {
+    if (minutes < 60) {
+      return `${minutes} min`
+    }
+    const hours = Math.floor(minutes / 60)
+    const mins = minutes % 60
+    return mins > 0 ? `${hours}h ${mins}min` : `${hours}h`
   }
 
   const formatWage = (wage: number | null) => {
     if (wage == null) return '—'
     return `${Number(wage).toLocaleString('en-US', { maximumFractionDigits: 0 })} RWF`
+  }
+
+  const formatCurrency = (amount: number | string) => {
+    const numAmount = typeof amount === 'string' ? parseFloat(amount) : amount
+    const formatted = isNaN(numAmount) ? 0 : numAmount
+    return `${formatted.toLocaleString('en-US', { maximumFractionDigits: 0 })} RWF`
   }
 
   const formatBreaks = (count: number, minutes: number | null) => {
@@ -81,9 +144,14 @@ const Dashboard: React.FC = () => {
 
   return (
     <div className="dashboard">
-      {error && (
-        <Alert variant="error" message={error} actionLabel="Retry" onAction={loadDailySummary} />
-      )}
+      <div className="toolbar" style={{ marginBottom: '1rem' }}>
+        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+          <CalendarDays size={18} color="var(--text-muted)" />
+          <span style={{ fontWeight: 600, color: 'var(--text-muted)' }}>
+            {new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+          </span>
+        </div>
+      </div>
 
       <div className="stats-grid stats-grid--4">
         <div className="stat-card">
@@ -126,10 +194,79 @@ const Dashboard: React.FC = () => {
         </div>
       </div>
 
+      {pendingReview.length > 0 && (
+        <div className="panel" style={{ marginBottom: '1.25rem' }}>
+          <div className="panel__head" style={{ background: '#fff1f2', borderColor: '#fecdd3' }}>
+            <h2 className="panel__title">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <AlertCircle size={18} />
+                Pending approval ({pendingReview.length})
+              </div>
+            </h2>
+          </div>
+          <div className="panel__body" style={{ padding: 0 }}>
+            <div className="table-wrap">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Worker #</th>
+                    <th>Name</th>
+                    <th>Date</th>
+                    <th>Entry</th>
+                    <th>Exit</th>
+                    <th>Late</th>
+                    <th>Hours</th>
+                    <th>Deductions</th>
+                    <th>Net pay</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {pendingReview.map((summary) => (
+                    <tr key={summary.id}>
+                      <td><strong>{summary.worker_number || `#${summary.worker_id}`}</strong></td>
+                      <td>{summary.full_name || '—'}</td>
+                      <td>{summary.work_date}</td>
+                      <td>{formatTime(summary.actual_entry_time)}</td>
+                      <td>{formatTime(summary.actual_exit_time)}</td>
+                      <td>
+                        {summary.is_late ? (
+                          <span className="status-badge incomplete">
+                            {formatMinutesToHours(summary.late_minutes)}
+                          </span>
+                        ) : (
+                          <span className="status-badge active">On time</span>
+                        )}
+                      </td>
+                      <td>{formatHours(summary.regular_hours_net)}</td>
+                      <td style={{ color: 'var(--rose)' }}>
+                        {formatCurrency(summary.total_deductions)}
+                      </td>
+                      <td>{formatCurrency(summary.net_pay)}</td>
+                      <td>
+                        <div className="action-buttons">
+                          <button
+                            onClick={() => handleOpenReview(summary)}
+                            className="btn-icon"
+                            title="View details"
+                          >
+                            <Eye size={16} />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="panel">
         <div className="panel__head">
-          <h2 className="panel__title">Today’s worker attendance</h2>
-          <CalendarDays size={18} color="var(--text-faint)" />
+          <h2 className="panel__title">Today's attendance</h2>
+          <Clock size={18} color="var(--text-faint)" />
         </div>
         <div className="panel__body" style={{ padding: 0 }}>
           {summary.length === 0 ? (
@@ -182,6 +319,295 @@ const Dashboard: React.FC = () => {
           )}
         </div>
       </div>
+
+      {/* Review Modal */}
+      {showReviewModal && selectedSummary && (
+        <div style={{
+          position: 'fixed',
+          inset: 0,
+          zIndex: 100,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          background: 'rgba(28, 29, 36, 0.65)',
+          backdropFilter: 'blur(4px)'
+        }}>
+          <div style={{
+            width: 'min(600px, calc(100vw - 2rem))',
+            maxHeight: 'calc(100vh - 4rem)',
+            background: 'var(--surface)',
+            borderRadius: 'var(--radius-xl)',
+            boxShadow: 'var(--shadow-lg)',
+            overflow: 'hidden',
+            display: 'flex',
+            flexDirection: 'column'
+          }}>
+            <div style={{
+              padding: '1.25rem 1.5rem',
+              borderBottom: '1px solid var(--border)',
+              background: 'var(--surface-2)'
+            }}>
+              <h3 style={{
+                fontFamily: 'var(--font-display)',
+                fontSize: '1.15rem',
+                fontWeight: 650,
+                margin: 0,
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.5rem'
+              }}>
+                <AlertCircle size={20} />
+                Review attendance
+              </h3>
+            </div>
+
+            <div style={{ padding: '1.5rem', overflowY: 'auto', flex: 1 }}>
+              {/* Worker Info */}
+              <div className="info-grid" style={{ marginBottom: '1.5rem' }}>
+                <div className="info-item">
+                  <label>Worker</label>
+                  <div className="info-value">{selectedSummary.full_name || '—'}</div>
+                </div>
+                <div className="info-item">
+                  <label>Worker #</label>
+                  <div className="info-value">{selectedSummary.worker_number || `#${selectedSummary.worker_id}`}</div>
+                </div>
+                <div className="info-item">
+                  <label>Classification</label>
+                  <div className="info-value">{selectedSummary.classification || '—'}</div>
+                </div>
+                <div className="info-item">
+                  <label>Work date</label>
+                  <div className="info-value">{selectedSummary.work_date}</div>
+                </div>
+              </div>
+
+              {/* Attendance Status */}
+              <div style={{ marginBottom: '1.5rem' }}>
+                <h4 style={{
+                  fontSize: '0.85rem',
+                  fontWeight: 700,
+                  color: 'var(--text-muted)',
+                  marginBottom: '0.75rem',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.05em'
+                }}>
+                  Attendance status
+                </h4>
+                <div className="info-grid">
+                  <div className="info-item">
+                    <label>Entry time</label>
+                    <div className="info-value">{formatTime(selectedSummary.actual_entry_time)}</div>
+                  </div>
+                  <div className="info-item">
+                    <label>Exit time</label>
+                    <div className="info-value">{formatTime(selectedSummary.actual_exit_time)}</div>
+                  </div>
+                  <div className="info-item">
+                    <label>Status</label>
+                    <div className="info-value">
+                      <span className={`status-badge ${selectedSummary.attendance_status === 'present' ? 'active' :
+                        selectedSummary.attendance_status === 'absent' ? 'inactive' :
+                          'incomplete'
+                        }`}>
+                        {selectedSummary.attendance_status}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="info-item">
+                    <label>Break time</label>
+                    <div className="info-value">
+                      {selectedSummary.break_minutes_unpaid > 0
+                        ? `${selectedSummary.break_minutes_unpaid} min (unpaid)`
+                        : '—'}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Issues Requiring Review */}
+              <div style={{ marginBottom: '1.5rem' }}>
+                <h4 style={{
+                  fontSize: '0.85rem',
+                  fontWeight: 700,
+                  color: 'var(--text-muted)',
+                  marginBottom: '0.75rem',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.05em'
+                }}>
+                  Issues requiring review
+                </h4>
+                <div style={{
+                  padding: '1rem',
+                  background: '#fff1f2',
+                  border: '1px solid #fecdd3',
+                  borderRadius: 'var(--radius)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '0.75rem'
+                }}>
+                  {selectedSummary.is_late && (
+                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem' }}>
+                      <Clock size={18} style={{ color: 'var(--rose)', flexShrink: 0, marginTop: '0.1rem' }} />
+                      <div>
+                        <div style={{ fontWeight: 700, color: 'var(--rose)', marginBottom: '0.25rem' }}>
+                          Late arrival
+                        </div>
+                        <div style={{ fontSize: '0.9rem', color: 'var(--text)' }}>
+                          Worker arrived <strong>{formatMinutesToHours(selectedSummary.late_minutes)} late</strong> (checked in at {formatTime(selectedSummary.actual_entry_time)}).
+                          Late deduction applied: <strong>{formatCurrency(selectedSummary.late_deduction_amount)}</strong>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {selectedSummary.is_early_departure && (
+                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem' }}>
+                      <Clock size={18} style={{ color: 'var(--rose)', flexShrink: 0, marginTop: '0.1rem' }} />
+                      <div>
+                        <div style={{ fontWeight: 700, color: 'var(--rose)', marginBottom: '0.25rem' }}>
+                          Early departure
+                        </div>
+                        <div style={{ fontSize: '0.9rem', color: 'var(--text)' }}>
+                          Worker left <strong>{formatMinutesToHours(selectedSummary.early_departure_minutes)} early</strong> (checked out at {formatTime(selectedSummary.actual_exit_time)}).
+                          Deduction applied: <strong>{formatCurrency(selectedSummary.early_departure_deduction)}</strong>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {selectedSummary.overtime_minutes_actual > 0 && (
+                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem' }}>
+                      <TrendingUp size={18} style={{ color: '#0284c7', flexShrink: 0, marginTop: '0.1rem' }} />
+                      <div>
+                        <div style={{ fontWeight: 700, color: '#0284c7', marginBottom: '0.25rem' }}>
+                          Overtime worked
+                        </div>
+                        <div style={{ fontSize: '0.9rem', color: 'var(--text)' }}>
+                          Worker completed <strong>{(selectedSummary.overtime_minutes_actual / 60).toFixed(2)} hours overtime</strong>.
+                          Additional pay: <strong>{formatCurrency(selectedSummary.overtime_pay)}</strong>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {selectedSummary.has_anomaly && selectedSummary.anomaly_description && (
+                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem' }}>
+                      <AlertCircle size={18} style={{ color: '#d97706', flexShrink: 0, marginTop: '0.1rem' }} />
+                      <div>
+                        <div style={{ fontWeight: 700, color: '#d97706', marginBottom: '0.25rem' }}>
+                          Anomaly detected
+                        </div>
+                        <div style={{ fontSize: '0.9rem', color: 'var(--text)' }}>
+                          {selectedSummary.anomaly_description}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {selectedSummary.attendance_status === 'incomplete' && (
+                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem' }}>
+                      <AlertCircle size={18} style={{ color: '#d97706', flexShrink: 0, marginTop: '0.1rem' }} />
+                      <div>
+                        <div style={{ fontWeight: 700, color: '#d97706', marginBottom: '0.25rem' }}>
+                          Incomplete attendance
+                        </div>
+                        <div style={{ fontSize: '0.9rem', color: 'var(--text)' }}>
+                          Missing {!selectedSummary.actual_entry_time ? 'entry' : 'exit'} time.
+                          Attendance record is incomplete and requires supervisor review.
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Pay Calculation */}
+              <div style={{ marginBottom: '1.5rem' }}>
+                <h4 style={{
+                  fontSize: '0.85rem',
+                  fontWeight: 700,
+                  color: 'var(--text-muted)',
+                  marginBottom: '0.75rem',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.05em'
+                }}>
+                  Pay calculation
+                </h4>
+                <div className="info-grid">
+                  <div className="info-item">
+                    <label>Hourly rate</label>
+                    <div className="info-value">{formatCurrency(selectedSummary.hourly_rate)}</div>
+                  </div>
+                  <div className="info-item">
+                    <label>Hours worked (net)</label>
+                    <div className="info-value">{formatHours(selectedSummary.regular_hours_net)}</div>
+                  </div>
+                  <div className="info-item">
+                    <label>Regular pay</label>
+                    <div className="info-value">{formatCurrency(selectedSummary.regular_pay)}</div>
+                  </div>
+                  <div className="info-item">
+                    <label>Overtime pay</label>
+                    <div className="info-value">
+                      {selectedSummary.overtime_pay > 0 ? formatCurrency(selectedSummary.overtime_pay) : '—'}
+                    </div>
+                  </div>
+                  <div className="info-item">
+                    <label>Gross pay</label>
+                    <div className="info-value" style={{ fontWeight: 700 }}>
+                      {formatCurrency(selectedSummary.gross_pay)}
+                    </div>
+                  </div>
+                  <div className="info-item">
+                    <label>Total deductions</label>
+                    <div className="info-value" style={{ color: 'var(--rose)', fontWeight: 700 }}>
+                      {formatCurrency(selectedSummary.total_deductions)}
+                    </div>
+                  </div>
+                  <div className="info-item-full">
+                    <label>Net pay</label>
+                    <div style={{
+                      fontSize: '1.5rem',
+                      fontWeight: 700,
+                      color: 'var(--teal)',
+                      fontFamily: 'var(--font-display)'
+                    }}>
+                      {formatCurrency(selectedSummary.net_pay)}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              gap: '0.65rem',
+              padding: '1rem 1.5rem',
+              borderTop: '1px solid var(--border)',
+              background: 'var(--surface-2)'
+            }}>
+              <button
+                onClick={() => {
+                  setShowReviewModal(false)
+                  setSelectedSummary(null)
+                }}
+                className="btn btn-secondary"
+              >
+                Close
+              </button>
+              <button
+                onClick={() => handleApproveSummary(selectedSummary)}
+                className="btn btn-primary"
+              >
+                <CheckCircle2 size={18} />
+                Approve for payroll
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

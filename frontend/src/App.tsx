@@ -7,7 +7,6 @@ import WorkerList from './views/WorkerList'
 import WorkerRegistration from './views/WorkerRegistration'
 import WorkerDetails from './views/WorkerDetails'
 import AttendanceRecording from './views/AttendanceRecording'
-import SupervisorDashboard from './views/SupervisorDashboard'
 import WorkerTimeCard from './views/WorkerTimeCard'
 import Reports from './views/Reports'
 
@@ -23,7 +22,6 @@ function App() {
             <Route path="/workers/:id/timecard" element={<WorkerTimeCard />} />
             <Route path="/register" element={<WorkerRegistration />} />
             <Route path="/attendance" element={<AttendanceRecording />} />
-            <Route path="/supervisor" element={<SupervisorDashboard />} />
             <Route path="/reports" element={<Reports />} />
           </Route>
         </Routes>

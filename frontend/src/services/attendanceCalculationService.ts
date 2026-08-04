@@ -3,6 +3,9 @@ import api from './api';
 export interface DailyWorkSummary {
     id?: number;
     worker_id: number;
+    worker_number?: string; // From JOIN with worker table
+    full_name?: string; // From JOIN with worker table
+    classification?: string; // From JOIN with worker table
     work_date: string;
     schedule_id: number;
     actual_entry_time?: string;

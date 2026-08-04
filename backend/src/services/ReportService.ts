@@ -204,7 +204,12 @@ export class ReportService {
             const dailyStatsMap = new Map<string, { total: number, minutes: number[], deductions: number }>()
 
             for (const late of lateArrivals) {
-                const date = late.work_date
+                // Ensure date is a string in YYYY-MM-DD format
+                const workDate = late.work_date as any
+                const date = workDate instanceof Date
+                    ? workDate.toISOString().split('T')[0]
+                    : String(workDate).split('T')[0]  // Handle ISO string format
+
                 if (!dailyStatsMap.has(date)) {
                     dailyStatsMap.set(date, { total: 0, minutes: [], deductions: 0 })
                 }
@@ -223,7 +228,9 @@ export class ReportService {
 
             // Worker statistics
             const workerStatsMap = new Map<number, {
-                worker: any,
+                worker_id: number,
+                worker_number: string,
+                full_name: string,
                 lates: typeof lateArrivals,
                 total_minutes: number,
                 total_deductions: number
@@ -231,9 +238,10 @@ export class ReportService {
 
             for (const late of lateArrivals) {
                 if (!workerStatsMap.has(late.worker_id)) {
-                    const worker = await this.workerRepo.findById(late.worker_id)
                     workerStatsMap.set(late.worker_id, {
-                        worker,
+                        worker_id: late.worker_id,
+                        worker_number: (late as any).worker_number,
+                        full_name: (late as any).full_name,
                         lates: [],
                         total_minutes: 0,
                         total_deductions: 0
@@ -262,9 +270,9 @@ export class ReportService {
                 else if (secondAvg - firstAvg > 2) trend = 'worsening'
 
                 return {
-                    worker_id: stats.worker!.id,
-                    worker_number: stats.worker!.worker_number,
-                    full_name: stats.worker!.full_name,
+                    worker_id: stats.worker_id,
+                    worker_number: stats.worker_number,
+                    full_name: stats.full_name,
                     total_lates: lateCount,
                     average_late_minutes: avgMinutes,
                     total_deductions: stats.total_deductions,

@@ -280,6 +280,7 @@ img {
     opacity: 0;
     transform: translateY(6px);
   }
+
   to {
     opacity: 1;
     transform: none;
@@ -424,6 +425,7 @@ img {
     opacity: 0;
     transform: translateY(-8px) translateX(8px);
   }
+
   to {
     opacity: 1;
     transform: translateY(0) translateX(0);
@@ -444,6 +446,7 @@ img {
       opacity: 0;
       transform: translateY(10px);
     }
+
     to {
       opacity: 1;
       transform: translateY(0);
@@ -631,10 +634,55 @@ img {
 
 /* Forms */
 
+.toolbar {
+  display: flex;
+  gap: 0.75rem;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  padding: 1rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  margin-bottom: 1.25rem;
+}
+
+.toolbar--compact {
+  gap: 0.35rem;
+  padding: 0.65rem 0.8rem;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.toolbar--compact .form-group {
+  gap: 0.25rem;
+  min-width: 0;
+  margin-left: 0.25rem;
+}
+
+.toolbar--compact .btn {
+  margin-left: 0.25rem;
+  height: 38px;
+  padding: 0.5rem 0.8rem;
+}
+
+.toolbar--compact .toolbar__action {
+  margin-left: 0.25rem;
+}
+
+.toolbar--compact input[type='date'],
+.toolbar--compact select {
+  min-width: 100px;
+  width: 110px;
+  max-width: 110px;
+  padding: 0.6rem 0.7rem;
+  font-size: 0.8rem;
+}
+
 .form-group {
   display: flex;
   flex-direction: column;
   gap: 0.4rem;
+  flex: 0 0 auto;
 }
 
 .form-group label {
@@ -657,6 +705,7 @@ img {
 input[type='text'],
 input[type='tel'],
 input[type='number'],
+input[type='date'],
 input[type='search'],
 select,
 textarea {
@@ -667,6 +716,14 @@ textarea {
   background: var(--surface);
   color: var(--text);
   transition: border-color 150ms var(--ease), box-shadow 150ms var(--ease);
+  font-size: 0.875rem;
+}
+
+.toolbar input[type='date'],
+.toolbar select {
+  width: auto;
+  min-width: 140px;
+  max-width: 180px;
 }
 
 input:focus,
@@ -920,11 +977,13 @@ table.data-table tbody tr:last-child td {
 }
 
 @keyframes pulse {
+
   0%,
   100% {
     transform: scale(1);
     box-shadow: 0 8px 20px rgba(39, 40, 51, 0.28);
   }
+
   50% {
     transform: scale(1.04);
     box-shadow: 0 12px 28px rgba(39, 40, 51, 0.38);
@@ -1083,14 +1142,17 @@ table.data-table tbody tr:last-child td {
   background: var(--teal-dim);
   color: var(--teal);
 }
+
 .btn-exit .btn-event__icon {
   background: #ffe4e6;
   color: #9f1239;
 }
+
 .btn-leave .btn-event__icon {
   background: #ffedd5;
   color: #9a3412;
 }
+
 .btn-return .btn-event__icon {
   background: #e0f2fe;
   color: #075985;
@@ -1099,12 +1161,15 @@ table.data-table tbody tr:last-child td {
 .btn-entry:not(:disabled) {
   border-color: rgba(39, 40, 51, 0.28);
 }
+
 .btn-exit:not(:disabled) {
   border-color: #fecdd3;
 }
+
 .btn-leave:not(:disabled) {
   border-color: #fed7aa;
 }
+
 .btn-return:not(:disabled) {
   border-color: #bae6fd;
 }
